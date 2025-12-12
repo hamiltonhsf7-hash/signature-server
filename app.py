@@ -1,6 +1,7 @@
 """
 Servidor de Assinaturas Digitais - HAMI ERP
 Deploy: Render.com
+Versão 2.0 - Com Selfie, Geolocalização e Dossiê Probatório
 """
 
 import os
@@ -8,7 +9,7 @@ import json
 import hashlib
 import base64
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
@@ -16,7 +17,7 @@ from psycopg.rows import dict_row
 app = Flask(__name__)
 CORS(app)
 
-# Configuração do banco de dados PostgreSQL (Render fornece automaticamente)
+# Configuração do banco de dados PostgreSQL
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
@@ -37,12 +38,13 @@ def init_db():
             titulo VARCHAR(255),
             arquivo_nome VARCHAR(255),
             arquivo_base64 TEXT,
+            arquivo_hash VARCHAR(64),
             criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             criado_por VARCHAR(100)
         )
     ''')
     
-    # Tabela de signatários
+    # Tabela de signatários (atualizada com novos campos)
     cur.execute('''
         CREATE TABLE IF NOT EXISTS signatarios (
             id SERIAL PRIMARY KEY,
@@ -50,14 +52,30 @@ def init_db():
             nome VARCHAR(255) NOT NULL,
             email VARCHAR(255),
             cpf VARCHAR(14),
+            telefone VARCHAR(20),
             token VARCHAR(64) UNIQUE NOT NULL,
             assinado BOOLEAN DEFAULT FALSE,
             assinatura_base64 TEXT,
+            selfie_base64 TEXT,
             ip_assinatura VARCHAR(45),
             data_assinatura TIMESTAMP,
-            user_agent TEXT
+            user_agent TEXT,
+            latitude DECIMAL(10, 8),
+            longitude DECIMAL(11, 8),
+            endereco_aproximado TEXT
         )
     ''')
+    
+    # Adicionar colunas se não existirem (para bancos existentes)
+    try:
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS selfie_base64 TEXT')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS telefone VARCHAR(20)')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS latitude DECIMAL(10, 8)')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS longitude DECIMAL(11, 8)')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS endereco_aproximado TEXT')
+        cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS arquivo_hash VARCHAR(64)')
+    except:
+        pass
     
     conn.commit()
     cur.close()
@@ -67,9 +85,9 @@ def init_db():
 try:
     init_db()
 except:
-    pass  # Banco será inicializado na primeira requisição
+    pass
 
-# ==================== PÁGINAS HTML ====================
+# ==================== PÁGINA DE ASSINATURA ====================
 
 PAGINA_ASSINATURA = '''
 <!DOCTYPE html>
@@ -96,11 +114,7 @@ PAGINA_ASSINATURA = '''
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.1);
         }
-        h1 {
-            text-align: center;
-            margin-bottom: 10px;
-            color: #4fc3f7;
-        }
+        h1 { text-align: center; margin-bottom: 10px; color: #4fc3f7; }
         .info {
             background: rgba(79, 195, 247, 0.1);
             padding: 15px;
@@ -121,16 +135,15 @@ PAGINA_ASSINATURA = '''
             border: none;
             border-radius: 5px;
         }
-        .assinatura-area {
+        .etapa {
             background: rgba(255,255,255,0.1);
             border-radius: 10px;
             padding: 20px;
             margin: 20px 0;
         }
-        .assinatura-area h3 {
-            margin-bottom: 15px;
-            color: #4fc3f7;
-        }
+        .etapa h3 { margin-bottom: 15px; color: #4fc3f7; }
+        .etapa.concluida { border: 2px solid #4caf50; }
+        .etapa.concluida h3::before { content: "✅ "; }
         #canvas-assinatura {
             background: #fff;
             border-radius: 10px;
@@ -139,11 +152,26 @@ PAGINA_ASSINATURA = '''
             width: 100%;
             height: 200px;
         }
+        #video-selfie, #canvas-selfie {
+            width: 100%;
+            max-width: 400px;
+            border-radius: 10px;
+            display: block;
+            margin: 0 auto;
+        }
+        #canvas-selfie { display: none; }
+        .preview-selfie {
+            max-width: 200px;
+            border-radius: 10px;
+            margin: 10px auto;
+            display: block;
+        }
         .botoes {
             display: flex;
             gap: 10px;
             margin-top: 15px;
             flex-wrap: wrap;
+            justify-content: center;
         }
         .btn {
             padding: 12px 25px;
@@ -153,20 +181,17 @@ PAGINA_ASSINATURA = '''
             font-size: 16px;
             font-weight: 600;
             transition: all 0.3s;
-            flex: 1;
-            min-width: 120px;
+            min-width: 150px;
         }
-        .btn-limpar {
-            background: #666;
-            color: #fff;
-        }
-        .btn-limpar:hover { background: #555; }
-        .btn-assinar {
+        .btn-secundario { background: #666; color: #fff; }
+        .btn-secundario:hover { background: #555; }
+        .btn-primario {
             background: linear-gradient(135deg, #4fc3f7 0%, #2196f3 100%);
             color: #fff;
         }
-        .btn-assinar:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(79, 195, 247, 0.4); }
-        .btn-assinar:disabled { background: #666; cursor: not-allowed; transform: none; }
+        .btn-primario:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(79, 195, 247, 0.4); }
+        .btn-primario:disabled { background: #666; cursor: not-allowed; transform: none; }
+        .btn-sucesso { background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%); color: #fff; }
         .sucesso {
             background: rgba(76, 175, 80, 0.2);
             border: 2px solid #4caf50;
@@ -184,17 +209,16 @@ PAGINA_ASSINATURA = '''
             text-align: center;
         }
         .erro h2 { color: #f44336; }
-        .ja-assinado {
-            background: rgba(255, 193, 7, 0.2);
-            border: 2px solid #ffc107;
-            border-radius: 15px;
-            padding: 30px;
+        .localizacao-info {
+            font-size: 12px;
+            color: #aaa;
             text-align: center;
+            margin-top: 10px;
         }
-        .ja-assinado h2 { color: #ffc107; }
         @media (max-width: 600px) {
             .container { padding: 15px; }
             .botoes { flex-direction: column; }
+            .btn { width: 100%; }
         }
     </style>
 </head>
@@ -204,7 +228,6 @@ PAGINA_ASSINATURA = '''
         <p style="text-align: center; color: #aaa;">HAMI ERP - Sistema de Assinaturas</p>
         
         <div id="conteudo">
-            <!-- Conteúdo será carregado via JavaScript -->
             <p style="text-align: center; padding: 50px;">Carregando...</p>
         </div>
     </div>
@@ -214,6 +237,9 @@ PAGINA_ASSINATURA = '''
         let canvas, ctx;
         let desenhando = false;
         let temAssinatura = false;
+        let selfieBase64 = null;
+        let localizacao = null;
+        let videoStream = null;
 
         async function carregarDocumento() {
             try {
@@ -232,7 +258,7 @@ PAGINA_ASSINATURA = '''
                 
                 if (data.ja_assinado) {
                     document.getElementById('conteudo').innerHTML = `
-                        <div class="ja-assinado">
+                        <div class="sucesso">
                             <h2>✅ Documento Já Assinado</h2>
                             <p>Este documento foi assinado em ${data.data_assinatura}</p>
                         </div>
@@ -251,19 +277,46 @@ PAGINA_ASSINATURA = '''
                         <iframe src="/api/pdf/${token}" title="Documento PDF"></iframe>
                     </div>
                     
-                    <div class="assinatura-area">
-                        <h3>✍️ Desenhe sua assinatura abaixo:</h3>
+                    <!-- ETAPA 1: Selfie -->
+                    <div class="etapa" id="etapa-selfie">
+                        <h3>📸 Etapa 1: Tire uma selfie para validação</h3>
+                        <video id="video-selfie" autoplay playsinline></video>
+                        <canvas id="canvas-selfie"></canvas>
+                        <img id="preview-selfie" class="preview-selfie" style="display: none;">
+                        <div class="botoes">
+                            <button class="btn btn-primario" id="btn-capturar" onclick="capturarSelfie()">
+                                📸 Tirar Foto
+                            </button>
+                            <button class="btn btn-secundario" id="btn-refazer" onclick="refazerSelfie()" style="display: none;">
+                                🔄 Tirar Outra
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- ETAPA 2: Assinatura -->
+                    <div class="etapa" id="etapa-assinatura" style="opacity: 0.5; pointer-events: none;">
+                        <h3>✍️ Etapa 2: Desenhe sua assinatura</h3>
                         <canvas id="canvas-assinatura"></canvas>
                         <div class="botoes">
-                            <button class="btn btn-limpar" onclick="limparAssinatura()">🗑️ Limpar</button>
-                            <button class="btn btn-assinar" id="btn-assinar" onclick="enviarAssinatura()" disabled>
+                            <button class="btn btn-secundario" onclick="limparAssinatura()">🗑️ Limpar</button>
+                        </div>
+                    </div>
+                    
+                    <!-- ETAPA 3: Confirmar -->
+                    <div class="etapa" id="etapa-confirmar" style="opacity: 0.5; pointer-events: none;">
+                        <h3>✅ Etapa 3: Confirme sua assinatura</h3>
+                        <p class="localizacao-info" id="info-localizacao">📍 Obtendo localização...</p>
+                        <div class="botoes">
+                            <button class="btn btn-sucesso" id="btn-assinar" onclick="enviarAssinatura()" disabled>
                                 ✅ Assinar Documento
                             </button>
                         </div>
                     </div>
                 `;
                 
+                inicializarCamera();
                 inicializarCanvas();
+                obterLocalizacao();
                 
             } catch (e) {
                 document.getElementById('conteudo').innerHTML = `
@@ -275,11 +328,78 @@ PAGINA_ASSINATURA = '''
             }
         }
 
+        async function inicializarCamera() {
+            try {
+                const video = document.getElementById('video-selfie');
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user', width: 640, height: 480 } 
+                });
+                video.srcObject = videoStream;
+            } catch (e) {
+                console.error('Erro ao acessar câmera:', e);
+                document.getElementById('etapa-selfie').innerHTML = `
+                    <h3>📸 Etapa 1: Selfie</h3>
+                    <p style="color: #ff9800; text-align: center; padding: 20px;">
+                        ⚠️ Não foi possível acessar a câmera.<br>
+                        Verifique as permissões do navegador.
+                    </p>
+                    <div class="botoes">
+                        <button class="btn btn-primario" onclick="pularSelfie()">Continuar sem selfie</button>
+                    </div>
+                `;
+            }
+        }
+
+        function pularSelfie() {
+            selfieBase64 = null;
+            document.getElementById('etapa-selfie').classList.add('concluida');
+            document.getElementById('etapa-assinatura').style.opacity = '1';
+            document.getElementById('etapa-assinatura').style.pointerEvents = 'auto';
+        }
+
+        function capturarSelfie() {
+            const video = document.getElementById('video-selfie');
+            const canvas = document.getElementById('canvas-selfie');
+            const preview = document.getElementById('preview-selfie');
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            
+            selfieBase64 = canvas.toDataURL('image/jpeg', 0.8);
+            
+            // Parar câmera e mostrar preview
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+            }
+            video.style.display = 'none';
+            preview.src = selfieBase64;
+            preview.style.display = 'block';
+            
+            document.getElementById('btn-capturar').style.display = 'none';
+            document.getElementById('btn-refazer').style.display = 'inline-block';
+            
+            // Liberar próxima etapa
+            document.getElementById('etapa-selfie').classList.add('concluida');
+            document.getElementById('etapa-assinatura').style.opacity = '1';
+            document.getElementById('etapa-assinatura').style.pointerEvents = 'auto';
+        }
+
+        function refazerSelfie() {
+            selfieBase64 = null;
+            document.getElementById('etapa-selfie').classList.remove('concluida');
+            document.getElementById('btn-capturar').style.display = 'inline-block';
+            document.getElementById('btn-refazer').style.display = 'none';
+            document.getElementById('preview-selfie').style.display = 'none';
+            document.getElementById('video-selfie').style.display = 'block';
+            inicializarCamera();
+        }
+
         function inicializarCanvas() {
             canvas = document.getElementById('canvas-assinatura');
-            ctx = canvas.getContext('2d');
+            if (!canvas) return;
             
-            // Ajustar tamanho real do canvas
+            ctx = canvas.getContext('2d');
             const rect = canvas.getBoundingClientRect();
             canvas.width = rect.width;
             canvas.height = 200;
@@ -289,13 +409,10 @@ PAGINA_ASSINATURA = '''
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             
-            // Eventos mouse
             canvas.addEventListener('mousedown', iniciarDesenho);
             canvas.addEventListener('mousemove', desenhar);
             canvas.addEventListener('mouseup', pararDesenho);
             canvas.addEventListener('mouseout', pararDesenho);
-            
-            // Eventos touch
             canvas.addEventListener('touchstart', iniciarDesenhoTouch);
             canvas.addEventListener('touchmove', desenharTouch);
             canvas.addEventListener('touchend', pararDesenho);
@@ -303,19 +420,13 @@ PAGINA_ASSINATURA = '''
 
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
-            return {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top
-            };
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
         }
 
         function getTouchPos(e) {
             const rect = canvas.getBoundingClientRect();
             const touch = e.touches[0];
-            return {
-                x: touch.clientX - rect.left,
-                y: touch.clientY - rect.top
-            };
+            return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
         }
 
         function iniciarDesenho(e) {
@@ -338,8 +449,7 @@ PAGINA_ASSINATURA = '''
             const pos = getPos(e);
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
-            temAssinatura = true;
-            document.getElementById('btn-assinar').disabled = false;
+            verificarAssinatura();
         }
 
         function desenharTouch(e) {
@@ -348,23 +458,51 @@ PAGINA_ASSINATURA = '''
             const pos = getTouchPos(e);
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
-            temAssinatura = true;
-            document.getElementById('btn-assinar').disabled = false;
+            verificarAssinatura();
         }
 
         function pararDesenho() {
             desenhando = false;
         }
 
+        function verificarAssinatura() {
+            temAssinatura = true;
+            document.getElementById('etapa-assinatura').classList.add('concluida');
+            document.getElementById('etapa-confirmar').style.opacity = '1';
+            document.getElementById('etapa-confirmar').style.pointerEvents = 'auto';
+            document.getElementById('btn-assinar').disabled = false;
+        }
+
         function limparAssinatura() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             temAssinatura = false;
+            document.getElementById('etapa-assinatura').classList.remove('concluida');
             document.getElementById('btn-assinar').disabled = true;
+        }
+
+        function obterLocalizacao() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        localizacao = {
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude
+                        };
+                        document.getElementById('info-localizacao').innerHTML = 
+                            `📍 Localização: ${localizacao.latitude.toFixed(6)}, ${localizacao.longitude.toFixed(6)}`;
+                    },
+                    (err) => {
+                        document.getElementById('info-localizacao').innerHTML = 
+                            '📍 Localização não disponível';
+                    },
+                    { enableHighAccuracy: true, timeout: 10000 }
+                );
+            }
         }
 
         async function enviarAssinatura() {
             if (!temAssinatura) {
-                alert('Por favor, desenhe sua assinatura antes de confirmar.');
+                alert('Por favor, desenhe sua assinatura.');
                 return;
             }
             
@@ -380,7 +518,10 @@ PAGINA_ASSINATURA = '''
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         token: token,
-                        assinatura: assinaturaBase64
+                        assinatura: assinaturaBase64,
+                        selfie: selfieBase64,
+                        latitude: localizacao?.latitude,
+                        longitude: localizacao?.longitude
                     })
                 });
                 
@@ -407,7 +548,6 @@ PAGINA_ASSINATURA = '''
             }
         }
 
-        // Carregar documento ao iniciar
         carregarDocumento();
     </script>
 </body>
@@ -463,17 +603,17 @@ def index():
 
 @app.route('/health')
 def health():
-    """Health check para Render"""
+    """Health check"""
     return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
 @app.route('/assinar/<token>')
 def pagina_assinatura(token):
-    """Página de assinatura para o signatário"""
+    """Página de assinatura"""
     return render_template_string(PAGINA_ASSINATURA, token=token)
 
 @app.route('/api/documento/<token>')
 def get_documento(token):
-    """Retorna informações do documento para assinatura"""
+    """Retorna informações do documento"""
     try:
         conn = get_db()
         cur = conn.cursor()
@@ -533,7 +673,6 @@ def get_pdf(token):
         
         pdf_data = base64.b64decode(row['arquivo_base64'])
         
-        from flask import Response
         return Response(
             pdf_data,
             mimetype='application/pdf',
@@ -545,11 +684,14 @@ def get_pdf(token):
 
 @app.route('/api/assinar', methods=['POST'])
 def assinar():
-    """Processa a assinatura"""
+    """Processa a assinatura com selfie e localização"""
     try:
         data = request.json
         token = data.get('token')
         assinatura_base64 = data.get('assinatura')
+        selfie_base64 = data.get('selfie')
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
         
         if not token or not assinatura_base64:
             return jsonify({'erro': 'Dados incompletos'})
@@ -557,7 +699,6 @@ def assinar():
         conn = get_db()
         cur = conn.cursor()
         
-        # Verificar se já foi assinado
         cur.execute('SELECT assinado FROM signatarios WHERE token = %s', (token,))
         row = cur.fetchone()
         
@@ -571,20 +712,26 @@ def assinar():
             conn.close()
             return jsonify({'erro': 'Documento já foi assinado'})
         
-        # Registrar assinatura
+        # Registrar assinatura com todos os dados
         cur.execute('''
             UPDATE signatarios 
             SET assinado = TRUE, 
                 assinatura_base64 = %s,
+                selfie_base64 = %s,
                 ip_assinatura = %s,
                 data_assinatura = %s,
-                user_agent = %s
+                user_agent = %s,
+                latitude = %s,
+                longitude = %s
             WHERE token = %s
         ''', (
             assinatura_base64,
+            selfie_base64,
             request.remote_addr,
             datetime.now(),
             request.headers.get('User-Agent', ''),
+            latitude,
+            longitude,
             token
         ))
         
@@ -599,7 +746,7 @@ def assinar():
 
 @app.route('/api/criar_documento', methods=['POST'])
 def criar_documento():
-    """Cria um novo documento para assinatura (chamado pelo ERP)"""
+    """Cria um novo documento para assinatura"""
     try:
         data = request.json
         
@@ -612,29 +759,32 @@ def criar_documento():
         if not arquivo_base64 or not signatarios:
             return jsonify({'erro': 'Dados incompletos'})
         
+        # Gerar hash do documento
+        arquivo_bytes = base64.b64decode(arquivo_base64)
+        arquivo_hash = hashlib.sha256(arquivo_bytes).hexdigest()
+        
         # Gerar ID do documento
         doc_id = hashlib.sha256(f"{datetime.now().isoformat()}{arquivo_nome}".encode()).hexdigest()[:16]
         
         conn = get_db()
         cur = conn.cursor()
         
-        # Inserir documento
+        # Inserir documento com hash
         cur.execute('''
-            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, criado_por)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, criado_por))
+            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por))
         
-        # Inserir signatários e gerar tokens
+        # Inserir signatários
         links = []
         for sig in signatarios:
             token = hashlib.sha256(f"{doc_id}{sig['nome']}{datetime.now().isoformat()}".encode()).hexdigest()[:32]
             
             cur.execute('''
-                INSERT INTO signatarios (doc_id, nome, email, cpf, token)
-                VALUES (%s, %s, %s, %s, %s)
-            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), token))
+                INSERT INTO signatarios (doc_id, nome, email, cpf, telefone, token)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token))
             
-            # Montar URL completa
             base_url = request.host_url.rstrip('/')
             link = f"{base_url}/assinar/{token}"
             
@@ -652,21 +802,94 @@ def criar_documento():
         return jsonify({
             'sucesso': True,
             'doc_id': doc_id,
+            'hash': arquivo_hash,
             'links': links
         })
         
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+@app.route('/api/dossie/<doc_id>')
+def get_dossie(doc_id):
+    """Retorna dossiê probatório completo do documento"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento
+        cur.execute('''
+            SELECT doc_id, titulo, arquivo_nome, arquivo_hash, criado_em, criado_por
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        doc = cur.fetchone()
+        
+        if not doc:
+            return jsonify({'erro': 'Documento não encontrado'})
+        
+        # Buscar signatários
+        cur.execute('''
+            SELECT nome, email, cpf, telefone, assinado, assinatura_base64, selfie_base64,
+                   ip_assinatura, data_assinatura, user_agent, latitude, longitude, token
+            FROM signatarios WHERE doc_id = %s
+        ''', (doc_id,))
+        signatarios = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        # Montar dossiê
+        dossie = {
+            'documento': {
+                'numero': doc['doc_id'],
+                'titulo': doc['titulo'],
+                'arquivo': doc['arquivo_nome'],
+                'hash_sha256': doc['arquivo_hash'],
+                'criado_em': doc['criado_em'].strftime('%d/%m/%Y %H:%M:%S') if doc['criado_em'] else '',
+                'criado_por': doc['criado_por']
+            },
+            'signatarios': []
+        }
+        
+        for sig in signatarios:
+            sig_info = {
+                'nome': sig['nome'],
+                'email': sig['email'],
+                'cpf': sig['cpf'],
+                'telefone': sig['telefone'],
+                'token': sig['token'],
+                'status': 'ASSINADO' if sig['assinado'] else 'PENDENTE'
+            }
+            
+            if sig['assinado']:
+                sig_info['assinatura'] = {
+                    'data_hora': sig['data_assinatura'].strftime('%d/%m/%Y %H:%M:%S') if sig['data_assinatura'] else '',
+                    'ip': sig['ip_assinatura'],
+                    'dispositivo': sig['user_agent'],
+                    'localizacao': f"{sig['latitude']}, {sig['longitude']}" if sig['latitude'] else 'Não disponível',
+                    'selfie': 'Capturada' if sig['selfie_base64'] else 'Não capturada',
+                    'assinatura_imagem': sig['assinatura_base64'][:50] + '...' if sig['assinatura_base64'] else None,
+                    'selfie_imagem': sig['selfie_base64'][:50] + '...' if sig['selfie_base64'] else None
+                }
+            
+            dossie['signatarios'].append(sig_info)
+        
+        todos_assinaram = all(s['status'] == 'ASSINADO' for s in dossie['signatarios'])
+        dossie['status'] = 'CONCLUÍDO' if todos_assinaram else 'PENDENTE'
+        
+        return jsonify(dossie)
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
 @app.route('/api/status/<doc_id>')
 def status_documento(doc_id):
-    """Retorna status de assinaturas de um documento"""
+    """Retorna status de assinaturas"""
     try:
         conn = get_db()
         cur = conn.cursor()
         
         cur.execute('''
-            SELECT s.nome, s.email, s.assinado, s.data_assinatura, s.assinatura_base64
+            SELECT s.nome, s.email, s.assinado, s.data_assinatura
             FROM signatarios s
             WHERE s.doc_id = %s
         ''', (doc_id,))
@@ -681,8 +904,7 @@ def status_documento(doc_id):
                 'nome': row['nome'],
                 'email': row['email'],
                 'assinado': row['assinado'],
-                'data_assinatura': row['data_assinatura'].strftime('%d/%m/%Y %H:%M') if row['data_assinatura'] else None,
-                'assinatura_base64': row['assinatura_base64'] if row['assinado'] else None
+                'data_assinatura': row['data_assinatura'].strftime('%d/%m/%Y %H:%M') if row['data_assinatura'] else None
             })
         
         return jsonify({
@@ -731,34 +953,6 @@ def listar_documentos():
         
     except Exception as e:
         return jsonify({'erro': str(e)})
-
-@app.route('/api/download/<doc_id>')
-def download_documento(doc_id):
-    """Baixa o documento com assinaturas embarcadas"""
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        
-        cur.execute('SELECT arquivo_base64, arquivo_nome FROM documentos WHERE doc_id = %s', (doc_id,))
-        row = cur.fetchone()
-        
-        cur.close()
-        conn.close()
-        
-        if not row:
-            return 'Documento não encontrado', 404
-        
-        pdf_data = base64.b64decode(row['arquivo_base64'])
-        
-        from flask import Response
-        return Response(
-            pdf_data,
-            mimetype='application/pdf',
-            headers={'Content-Disposition': f'attachment; filename="{row["arquivo_nome"]}"'}
-        )
-        
-    except Exception as e:
-        return f'Erro: {str(e)}', 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
