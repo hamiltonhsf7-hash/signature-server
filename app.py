@@ -10,8 +10,8 @@ import base64
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 
 app = Flask(__name__)
 CORS(app)
@@ -21,7 +21,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
     """Retorna conexão com o banco de dados"""
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return conn
 
 def init_db():
@@ -763,3 +763,4 @@ def download_documento(doc_id):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
