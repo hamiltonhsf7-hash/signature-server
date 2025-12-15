@@ -1011,6 +1011,196 @@ def status_documento(doc_id):
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+@app.route('/api/pdf_assinado/<doc_id>')
+def get_pdf_assinado(doc_id):
+    """Gera e retorna PDF com assinaturas aplicadas"""
+    try:
+        from io import BytesIO
+        from PyPDF2 import PdfReader, PdfWriter
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.utils import ImageReader
+        from PIL import Image
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento
+        cur.execute('''
+            SELECT doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_em
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        doc = cur.fetchone()
+        
+        if not doc or not doc['arquivo_base64']:
+            cur.close()
+            conn.close()
+            return jsonify({'erro': 'Documento não encontrado'}), 404
+        
+        # Buscar signatários que assinaram
+        cur.execute('''
+            SELECT nome, email, cpf, assinado, assinatura_base64, selfie_base64,
+                   data_assinatura, ip_assinatura, latitude, longitude
+            FROM signatarios WHERE doc_id = %s
+        ''', (doc_id,))
+        signatarios = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        # Verificar se todos assinaram
+        todos_assinaram = all(s['assinado'] for s in signatarios)
+        if not todos_assinaram:
+            return jsonify({'erro': 'Documento ainda não foi totalmente assinado'}), 400
+        
+        # Decodificar PDF original
+        pdf_original = base64.b64decode(doc['arquivo_base64'])
+        
+        # Ler PDF original
+        reader = PdfReader(BytesIO(pdf_original))
+        writer = PdfWriter()
+        
+        # Copiar todas as páginas do original
+        for page in reader.pages:
+            writer.add_page(page)
+        
+        # Criar página de assinaturas
+        sig_buffer = BytesIO()
+        c = canvas.Canvas(sig_buffer, pagesize=A4)
+        width, height = A4
+        
+        # Cabeçalho
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(50, height - 50, "FOLHA DE ASSINATURAS DIGITAIS")
+        
+        c.setFont("Helvetica", 10)
+        c.drawString(50, height - 70, f"Documento: {doc['titulo'] or doc['arquivo_nome']}")
+        c.drawString(50, height - 85, f"Hash SHA-256: {doc['arquivo_hash'][:32]}...")
+        c.drawString(50, height - 100, f"Criado em: {doc['criado_em'].strftime('%d/%m/%Y %H:%M:%S') if doc['criado_em'] else ''}")
+        
+        c.line(50, height - 115, width - 50, height - 115)
+        
+        # Posição inicial para assinaturas
+        y_pos = height - 150
+        
+        for sig in signatarios:
+            if sig['assinado']:
+                # Nome do signatário
+                c.setFont("Helvetica-Bold", 11)
+                c.drawString(50, y_pos, f"Signatário: {sig['nome']}")
+                y_pos -= 15
+                
+                c.setFont("Helvetica", 9)
+                if sig['email']:
+                    c.drawString(50, y_pos, f"Email: {sig['email']}")
+                    y_pos -= 12
+                if sig['cpf']:
+                    c.drawString(50, y_pos, f"CPF: {sig['cpf']}")
+                    y_pos -= 12
+                if sig['data_assinatura']:
+                    c.drawString(50, y_pos, f"Data: {sig['data_assinatura'].strftime('%d/%m/%Y %H:%M:%S')}")
+                    y_pos -= 12
+                if sig['ip_assinatura']:
+                    c.drawString(50, y_pos, f"IP: {sig['ip_assinatura']}")
+                    y_pos -= 12
+                if sig['latitude'] and sig['longitude']:
+                    c.drawString(50, y_pos, f"Localização: {sig['latitude']}, {sig['longitude']}")
+                    y_pos -= 12
+                
+                y_pos -= 5
+                
+                # Desenhar imagem de assinatura
+                if sig['assinatura_base64']:
+                    try:
+                        # Remover prefixo data:image/png;base64, se existir
+                        img_data = sig['assinatura_base64']
+                        if ',' in img_data:
+                            img_data = img_data.split(',')[1]
+                        
+                        img_bytes = base64.b64decode(img_data)
+                        img = Image.open(BytesIO(img_bytes))
+                        
+                        # Redimensionar mantendo proporção
+                        max_width = 150
+                        max_height = 60
+                        img.thumbnail((max_width, max_height), Image.LANCZOS)
+                        
+                        # Desenhar no canvas
+                        img_buffer = BytesIO()
+                        img.save(img_buffer, format='PNG')
+                        img_buffer.seek(0)
+                        
+                        c.drawImage(ImageReader(img_buffer), 50, y_pos - img.height, 
+                                   width=img.width, height=img.height)
+                        y_pos -= img.height + 10
+                    except Exception as e:
+                        c.drawString(50, y_pos, f"[Erro ao carregar assinatura: {str(e)[:50]}]")
+                        y_pos -= 15
+                
+                # Desenhar selfie (menor)
+                if sig['selfie_base64']:
+                    try:
+                        img_data = sig['selfie_base64']
+                        if ',' in img_data:
+                            img_data = img_data.split(',')[1]
+                        
+                        img_bytes = base64.b64decode(img_data)
+                        img = Image.open(BytesIO(img_bytes))
+                        
+                        max_width = 60
+                        max_height = 60
+                        img.thumbnail((max_width, max_height), Image.LANCZOS)
+                        
+                        img_buffer = BytesIO()
+                        img.save(img_buffer, format='JPEG')
+                        img_buffer.seek(0)
+                        
+                        c.drawImage(ImageReader(img_buffer), 220, y_pos, 
+                                   width=img.width, height=img.height)
+                    except:
+                        pass
+                
+                y_pos -= 20
+                c.line(50, y_pos, width - 50, y_pos)
+                y_pos -= 20
+                
+                # Nova página se necessário
+                if y_pos < 100:
+                    c.showPage()
+                    y_pos = height - 50
+        
+        # Rodapé
+        c.setFont("Helvetica", 8)
+        c.drawString(50, 30, "Documento assinado digitalmente via HAMI ERP - Sistema de Assinaturas Digitais")
+        c.drawString(50, 18, f"Gerado em: {agora_brasil().strftime('%d/%m/%Y %H:%M:%S')} (Horário de Brasília)")
+        
+        c.save()
+        
+        # Adicionar página de assinaturas ao PDF
+        sig_buffer.seek(0)
+        sig_reader = PdfReader(sig_buffer)
+        for page in sig_reader.pages:
+            writer.add_page(page)
+        
+        # Gerar PDF final
+        output = BytesIO()
+        writer.write(output)
+        output.seek(0)
+        
+        return Response(
+            output.getvalue(),
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="ASSINADO_{doc["arquivo_nome"]}"',
+                'Content-Type': 'application/pdf'
+            }
+        )
+        
+    except ImportError as e:
+        return jsonify({'erro': f'Dependências não instaladas: {e}'}), 500
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
 @app.route('/api/documento/<token>/download')
 def download_documento(token):
     """Baixa o PDF do documento assinado"""
