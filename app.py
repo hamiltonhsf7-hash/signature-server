@@ -69,7 +69,8 @@ def init_db():
             user_agent TEXT,
             latitude DECIMAL(10, 8),
             longitude DECIMAL(11, 8),
-            endereco_aproximado TEXT
+            endereco_aproximado TEXT,
+            data_nascimento DATE
         )
     ''')
     
@@ -80,6 +81,7 @@ def init_db():
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS latitude DECIMAL(10, 8)')
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS longitude DECIMAL(11, 8)')
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS endereco_aproximado TEXT')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS data_nascimento DATE')
         cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS arquivo_hash VARCHAR(64)')
         cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS pasta_id INTEGER DEFAULT 1')
     except:
@@ -296,6 +298,54 @@ PAGINA_ASSINATURA = '''
             .botoes { flex-direction: column; }
             .btn { width: 100%; }
         }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #4fc3f7;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
+        .form-group input::placeholder {
+            color: rgba(255,255,255,0.5);
+        }
+        .erro-validacao {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid #f44336;
+            color: #ff8a80;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+        }
+        .sucesso-validacao {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid #4caf50;
+            color: #a5d6a7;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+        }
+        .etapa.bloqueada {
+            opacity: 0.3;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -370,9 +420,30 @@ PAGINA_ASSINATURA = '''
                         <iframe src="/api/pdf/${token}" title="Documento PDF"></iframe>
                     </div>
                     
-                    <!-- ETAPA 1: Selfie -->
-                    <div class="etapa" id="etapa-selfie">
-                        <h3>📸 Etapa 1: Tire uma selfie para validação</h3>
+                    <!-- ETAPA 0: Validação de Identidade -->
+                    <div class="etapa" id="etapa-validacao">
+                        <h3>🔐 Etapa 1: Confirme sua identidade</h3>
+                        <p style="margin-bottom: 15px; color: #aaa;">Para sua segurança, informe seus dados cadastrais.</p>
+                        <div class="form-group">
+                            <label for="input-cpf">CPF</label>
+                            <input type="text" id="input-cpf" placeholder="000.000.000-00" maxlength="14" oninput="formatarCPF(this)">
+                        </div>
+                        <div class="form-group">
+                            <label for="input-nascimento">Data de Nascimento</label>
+                            <input type="date" id="input-nascimento">
+                        </div>
+                        <div id="erro-validacao" class="erro-validacao"></div>
+                        <div id="sucesso-validacao" class="sucesso-validacao"></div>
+                        <div class="botoes">
+                            <button class="btn btn-primario" id="btn-validar" onclick="validarDados()">
+                                🔍 Validar Dados
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- ETAPA 1: Selfie (bloqueada até validação) -->
+                    <div class="etapa bloqueada" id="etapa-selfie">
+                        <h3>📸 Etapa 2: Tire uma selfie para validação</h3>
                         <video id="video-selfie" autoplay playsinline></video>
                         <canvas id="canvas-selfie"></canvas>
                         <img id="preview-selfie" class="preview-selfie" style="display: none;">
@@ -387,8 +458,8 @@ PAGINA_ASSINATURA = '''
                     </div>
                     
                     <!-- ETAPA 2: Assinatura -->
-                    <div class="etapa" id="etapa-assinatura" style="opacity: 0.5; pointer-events: none;">
-                        <h3>✍️ Etapa 2: Desenhe sua assinatura</h3>
+                    <div class="etapa bloqueada" id="etapa-assinatura">
+                        <h3>✍️ Etapa 3: Desenhe sua assinatura</h3>
                         <canvas id="canvas-assinatura"></canvas>
                         <div class="botoes">
                             <button class="btn btn-secundario" onclick="limparAssinatura()">🗑️ Limpar</button>
@@ -396,8 +467,8 @@ PAGINA_ASSINATURA = '''
                     </div>
                     
                     <!-- ETAPA 3: Confirmar -->
-                    <div class="etapa" id="etapa-confirmar" style="opacity: 0.5; pointer-events: none;">
-                        <h3>✅ Etapa 3: Confirme sua assinatura</h3>
+                    <div class="etapa bloqueada" id="etapa-confirmar">
+                        <h3>✅ Etapa 4: Confirme sua assinatura</h3>
                         <p class="localizacao-info" id="info-localizacao">📍 Obtendo localização...</p>
                         <div class="botoes">
                             <button class="btn btn-sucesso" id="btn-assinar" onclick="enviarAssinatura()" disabled>
@@ -407,7 +478,7 @@ PAGINA_ASSINATURA = '''
                     </div>
                 `;
                 
-                inicializarCamera();
+                // Não inicializa câmera aqui - espera validação
                 inicializarCanvas();
                 obterLocalizacao();
                 
@@ -419,6 +490,86 @@ PAGINA_ASSINATURA = '''
                         <p>Não foi possível carregar o documento. Tente novamente.</p>
                     </div>
                 `;
+            }
+        }
+
+        // Formatar CPF com máscara
+        function formatarCPF(input) {
+            let value = input.value.replace(/\D/g, '');
+            if (value.length > 11) value = value.slice(0, 11);
+            
+            if (value.length > 9) {
+                value = value.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+            } else if (value.length > 6) {
+                value = value.replace(/^(\d{3})(\d{3})(\d{0,3})$/, '$1.$2.$3');
+            } else if (value.length > 3) {
+                value = value.replace(/^(\d{3})(\d{0,3})$/, '$1.$2');
+            }
+            input.value = value;
+        }
+
+        // Validar dados do signatário
+        async function validarDados() {
+            const cpf = document.getElementById('input-cpf').value;
+            const nascimento = document.getElementById('input-nascimento').value;
+            const erroDiv = document.getElementById('erro-validacao');
+            const sucessoDiv = document.getElementById('sucesso-validacao');
+            const btnValidar = document.getElementById('btn-validar');
+            
+            erroDiv.style.display = 'none';
+            sucessoDiv.style.display = 'none';
+            
+            if (!cpf || !nascimento) {
+                erroDiv.textContent = 'Por favor, preencha o CPF e a data de nascimento.';
+                erroDiv.style.display = 'block';
+                return;
+            }
+            
+            btnValidar.disabled = true;
+            btnValidar.textContent = '⏳ Validando...';
+            
+            try {
+                const resp = await fetch('/api/validar_signatario', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token: token,
+                        cpf: cpf,
+                        data_nascimento: nascimento
+                    })
+                });
+                
+                const data = await resp.json();
+                
+                if (data.valido) {
+                    sucessoDiv.textContent = '✅ ' + (data.mensagem || 'Dados validados com sucesso!');
+                    sucessoDiv.style.display = 'block';
+                    
+                    // Marcar etapa como concluída
+                    document.getElementById('etapa-validacao').classList.add('concluida');
+                    
+                    // Desbloquear etapa de selfie
+                    document.getElementById('etapa-selfie').classList.remove('bloqueada');
+                    
+                    // Desabilitar campos para evitar alteração
+                    document.getElementById('input-cpf').disabled = true;
+                    document.getElementById('input-nascimento').disabled = true;
+                    btnValidar.style.display = 'none';
+                    
+                    // Iniciar câmera para selfie
+                    inicializarCamera();
+                } else {
+                    erroDiv.textContent = '❌ ' + (data.erro || 'Dados não conferem com o cadastro.');
+                    erroDiv.style.display = 'block';
+                    btnValidar.disabled = false;
+                    btnValidar.textContent = '🔍 Validar Dados';
+                }
+                
+            } catch (e) {
+                erroDiv.textContent = '❌ Erro ao validar dados. Tente novamente.';
+                erroDiv.style.display = 'block';
+                btnValidar.disabled = false;
+                btnValidar.textContent = '🔍 Validar Dados';
             }
         }
 
@@ -447,8 +598,7 @@ PAGINA_ASSINATURA = '''
         function pularSelfie() {
             selfieBase64 = null;
             document.getElementById('etapa-selfie').classList.add('concluida');
-            document.getElementById('etapa-assinatura').style.opacity = '1';
-            document.getElementById('etapa-assinatura').style.pointerEvents = 'auto';
+            document.getElementById('etapa-assinatura').classList.remove('bloqueada');
         }
 
         function capturarSelfie() {
@@ -475,8 +625,7 @@ PAGINA_ASSINATURA = '''
             
             // Liberar próxima etapa
             document.getElementById('etapa-selfie').classList.add('concluida');
-            document.getElementById('etapa-assinatura').style.opacity = '1';
-            document.getElementById('etapa-assinatura').style.pointerEvents = 'auto';
+            document.getElementById('etapa-assinatura').classList.remove('bloqueada');
         }
 
         function refazerSelfie() {
@@ -806,6 +955,12 @@ def assinar():
             conn.close()
             return jsonify({'erro': 'Documento já foi assinado'})
         
+        # Obter IP real (considerando proxies como Render, Cloudflare, etc.)
+        ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+        if ip_real and ',' in ip_real:
+            # X-Forwarded-For pode ter múltiplos IPs, pegar o primeiro (IP original do cliente)
+            ip_real = ip_real.split(',')[0].strip()
+        
         # Registrar assinatura com todos os dados
         cur.execute('''
             UPDATE signatarios 
@@ -821,7 +976,7 @@ def assinar():
         ''', (
             assinatura_base64,
             selfie_base64,
-            request.remote_addr,
+            ip_real,
             agora_brasil(),
             request.headers.get('User-Agent', ''),
             latitude,
@@ -837,6 +992,81 @@ def assinar():
         
     except Exception as e:
         return jsonify({'erro': str(e)})
+
+@app.route('/api/validar_signatario', methods=['POST'])
+def validar_signatario():
+    """Valida CPF e data de nascimento do signatário antes de permitir assinatura"""
+    try:
+        data = request.json
+        token = data.get('token')
+        cpf_informado = data.get('cpf', '').replace('.', '').replace('-', '').strip()
+        data_nascimento_informada = data.get('data_nascimento', '').strip()
+        
+        if not token:
+            return jsonify({'erro': 'Token não informado', 'valido': False})
+        
+        if not cpf_informado or not data_nascimento_informada:
+            return jsonify({'erro': 'CPF e data de nascimento são obrigatórios', 'valido': False})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar dados cadastrados do signatário
+        cur.execute('''
+            SELECT cpf, data_nascimento, nome, assinado
+            FROM signatarios WHERE token = %s
+        ''', (token,))
+        
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not row:
+            return jsonify({'erro': 'Token inválido', 'valido': False})
+        
+        if row['assinado']:
+            return jsonify({'erro': 'Este documento já foi assinado', 'valido': False})
+        
+        # Comparar CPF (remover formatação)
+        cpf_cadastrado = (row['cpf'] or '').replace('.', '').replace('-', '').strip()
+        
+        if cpf_informado != cpf_cadastrado:
+            return jsonify({
+                'erro': 'CPF não confere com o cadastro. Verifique os dados informados.',
+                'valido': False
+            })
+        
+        # Comparar data de nascimento
+        data_cadastrada = row['data_nascimento']
+        
+        if data_cadastrada:
+            # Converter para string no formato YYYY-MM-DD
+            if hasattr(data_cadastrada, 'strftime'):
+                data_cadastrada_str = data_cadastrada.strftime('%Y-%m-%d')
+            else:
+                data_cadastrada_str = str(data_cadastrada)
+            
+            # Normalizar data informada (pode vir como DD/MM/YYYY ou YYYY-MM-DD)
+            data_informada_normalizada = data_nascimento_informada
+            if '/' in data_nascimento_informada:
+                partes = data_nascimento_informada.split('/')
+                if len(partes) == 3:
+                    data_informada_normalizada = f"{partes[2]}-{partes[1]}-{partes[0]}"
+            
+            if data_informada_normalizada != data_cadastrada_str:
+                return jsonify({
+                    'erro': 'Data de nascimento não confere com o cadastro. Verifique os dados informados.',
+                    'valido': False
+                })
+        
+        return jsonify({
+            'valido': True,
+            'nome': row['nome'],
+            'mensagem': 'Dados validados com sucesso!'
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e), 'valido': False})
 
 @app.route('/api/criar_documento', methods=['POST'])
 def criar_documento():
@@ -876,9 +1106,9 @@ def criar_documento():
             token = hashlib.sha256(f"{doc_id}{sig['nome']}{datetime.now().isoformat()}".encode()).hexdigest()[:32]
             
             cur.execute('''
-                INSERT INTO signatarios (doc_id, nome, email, cpf, telefone, token)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token))
+                INSERT INTO signatarios (doc_id, nome, email, cpf, telefone, token, data_nascimento)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token, sig.get('data_nascimento')))
             
             base_url = request.host_url.rstrip('/')
             link = f"{base_url}/assinar/{token}"
@@ -1013,7 +1243,7 @@ def status_documento(doc_id):
 
 @app.route('/api/pdf_assinado/<doc_id>')
 def get_pdf_assinado(doc_id):
-    """Gera e retorna PDF com assinaturas aplicadas - Layout estilo ZapSign"""
+    """Gera e retorna PDF com assinaturas aplicadas - Layout melhorado"""
     try:
         from io import BytesIO
         from PyPDF2 import PdfReader, PdfWriter
@@ -1075,6 +1305,7 @@ def get_pdf_assinado(doc_id):
         cor_label = HexColor('#666666')
         cor_valor = HexColor('#000000')
         cor_linha = HexColor('#cccccc')
+        cor_fundo_imagem = HexColor('#f5f5f5')
         
         # Cabeçalho com título
         c.setFillColor(cor_titulo)
@@ -1116,15 +1347,15 @@ def get_pdf_assinado(doc_id):
         
         for idx, sig in enumerate(signatarios):
             if sig['assinado']:
-                # Verificar se precisa de nova página
-                if y_pos < 250:
+                # Verificar se precisa de nova página (altura maior para novo layout)
+                if y_pos < 320:
                     c.showPage()
                     y_pos = height - 50
                 
-                # Box do signatário
+                # Box do signatário (altura maior para acomodar imagens)
                 c.setStrokeColor(cor_linha)
                 c.setLineWidth(0.5)
-                box_height = 200
+                box_height = 280
                 c.rect(50, y_pos - box_height, width - 100, box_height, stroke=1, fill=0)
                 
                 # Nome do signatário (título do box)
@@ -1132,7 +1363,7 @@ def get_pdf_assinado(doc_id):
                 c.setFont("Helvetica-Bold", 12)
                 c.drawString(60, y_pos - 20, f"Signatário: {sig['nome']}")
                 
-                # Coluna esquerda - Informações
+                # Informações textuais - coluna esquerda
                 col_x = 60
                 info_y = y_pos - 40
                 
@@ -1168,7 +1399,7 @@ def get_pdf_assinado(doc_id):
                     c.drawString(col_x, info_y, "Data e hora da assinatura:")
                     c.setFillColor(cor_valor)
                     data_str = sig['data_assinatura'].strftime('%d/%m/%Y às %H:%M:%S')
-                    c.drawString(col_x + 130, info_y, data_str)
+                    c.drawString(col_x + 140, info_y, data_str)
                     info_y -= 14
                 
                 # Token
@@ -1181,25 +1412,43 @@ def get_pdf_assinado(doc_id):
                     c.setFont("Helvetica", 9)
                     info_y -= 14
                 
-                # IP
-                if sig['ip_assinatura']:
-                    c.setFillColor(cor_label)
-                    c.drawString(col_x, info_y, "IP real do dispositivo:")
-                    c.setFillColor(cor_valor)
-                    c.drawString(col_x + 115, info_y, sig['ip_assinatura'])
-                    info_y -= 14
+                # IP (usar X-Forwarded-For se disponível, senão ip_assinatura)
+                ip_real = sig['ip_assinatura'] or 'Não disponível'
+                c.setFillColor(cor_label)
+                c.drawString(col_x, info_y, "IP do dispositivo:")
+                c.setFillColor(cor_valor)
+                c.drawString(col_x + 95, info_y, ip_real)
+                info_y -= 14
                 
-                # Dispositivo (User Agent)
+                # Dispositivo (User Agent) - texto maior, múltiplas linhas se necessário
                 if sig.get('user_agent'):
                     c.setFillColor(cor_label)
                     c.drawString(col_x, info_y, "Dispositivo:")
                     c.setFillColor(cor_valor)
                     c.setFont("Helvetica", 7)
-                    # Truncar user agent se muito longo
-                    ua = sig['user_agent'][:80] + '...' if len(sig['user_agent']) > 80 else sig['user_agent']
-                    c.drawString(col_x + 60, info_y, ua)
+                    
+                    # Quebrar user agent em múltiplas linhas se necessário
+                    ua = sig['user_agent']
+                    max_chars_per_line = 90
+                    
+                    if len(ua) <= max_chars_per_line:
+                        c.drawString(col_x + 60, info_y, ua)
+                        info_y -= 12
+                    else:
+                        # Primeira linha
+                        c.drawString(col_x + 60, info_y, ua[:max_chars_per_line])
+                        info_y -= 10
+                        # Segunda linha (continuação)
+                        if len(ua) > max_chars_per_line:
+                            c.drawString(col_x + 60, info_y, ua[max_chars_per_line:max_chars_per_line*2])
+                            info_y -= 10
+                        # Terceira linha se necessário
+                        if len(ua) > max_chars_per_line * 2:
+                            c.drawString(col_x + 60, info_y, ua[max_chars_per_line*2:])
+                            info_y -= 10
+                    
                     c.setFont("Helvetica", 9)
-                    info_y -= 14
+                    info_y -= 4
                 
                 # Localização
                 if sig['latitude'] and sig['longitude']:
@@ -1209,13 +1458,26 @@ def get_pdf_assinado(doc_id):
                     loc = f"{sig['latitude']}, {sig['longitude']}"
                     if sig.get('endereco_aproximado'):
                         loc = sig['endereco_aproximado']
-                    c.drawString(col_x + 120, info_y, loc[:50])
+                    c.drawString(col_x + 125, info_y, loc[:60])
                     info_y -= 14
                 
-                # Coluna direita - Selfie (MAIOR - 120x120)
-                selfie_x = width - 180
-                selfie_y = y_pos - 145
+                # Linha separadora antes das imagens
+                c.setStrokeColor(cor_linha)
+                c.setLineWidth(0.5)
+                images_y = y_pos - box_height + 110
+                c.line(60, images_y + 15, width - 60, images_y + 15)
                 
+                # Título da seção de imagens
+                c.setFillColor(cor_label)
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(60, images_y + 5, "Evidências de Identificação:")
+                
+                # Layout lado a lado: Selfie à esquerda, Assinatura à direita
+                selfie_x = 70
+                assinatura_x = width / 2 + 20
+                img_y = images_y - 100
+                
+                # SELFIE - Maior (150x150) e melhor qualidade
                 if sig['selfie_base64']:
                     try:
                         img_data = sig['selfie_base64']
@@ -1225,28 +1487,41 @@ def get_pdf_assinado(doc_id):
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(BytesIO(img_bytes))
                         
-                        # Selfie MAIOR - 120x120
-                        max_size = 120
+                        # Converter para RGB se necessário
+                        if img.mode in ('RGBA', 'LA', 'P'):
+                            background = Image.new('RGB', img.size, (255, 255, 255))
+                            if img.mode == 'P':
+                                img = img.convert('RGBA')
+                            background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                            img = background
+                        elif img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Selfie MAIOR - 150x150
+                        max_size = 150
                         img.thumbnail((max_size, max_size), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
-                        img.save(img_buffer, format='JPEG', quality=85)
+                        img.save(img_buffer, format='JPEG', quality=95)
                         img_buffer.seek(0)
                         
-                        c.drawImage(ImageReader(img_buffer), selfie_x, selfie_y, 
+                        # Desenhar fundo cinza claro
+                        c.setFillColor(cor_fundo_imagem)
+                        c.rect(selfie_x - 5, img_y - 5, img.width + 10, img.height + 10, stroke=0, fill=1)
+                        
+                        c.drawImage(ImageReader(img_buffer), selfie_x, img_y, 
                                    width=img.width, height=img.height)
                         
                         # Legenda da selfie
                         c.setFillColor(cor_label)
-                        c.setFont("Helvetica", 7)
-                        c.drawString(selfie_x, selfie_y - 10, "Foto de identificação")
-                    except:
-                        pass
+                        c.setFont("Helvetica", 8)
+                        c.drawString(selfie_x, img_y - 15, "Foto de identificação (Selfie)")
+                    except Exception as e:
+                        c.setFillColor(cor_label)
+                        c.setFont("Helvetica", 8)
+                        c.drawString(selfie_x, img_y + 50, "Selfie não disponível")
                 
-                # Assinatura manuscrita
-                assinatura_x = 60
-                assinatura_y = y_pos - box_height + 50
-                
+                # ASSINATURA - Maior (250x100) com fundo branco
                 if sig['assinatura_base64']:
                     try:
                         img_data = sig['assinatura_base64']
@@ -1256,23 +1531,44 @@ def get_pdf_assinado(doc_id):
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(BytesIO(img_bytes))
                         
-                        max_width = 200
-                        max_height = 70
+                        # IMPORTANTE: Converter PNG com transparência para fundo branco
+                        if img.mode in ('RGBA', 'LA', 'P'):
+                            background = Image.new('RGB', img.size, (255, 255, 255))
+                            if img.mode == 'P':
+                                img = img.convert('RGBA')
+                            if img.mode == 'RGBA':
+                                background.paste(img, mask=img.split()[3])
+                            else:
+                                background.paste(img)
+                            img = background
+                        elif img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Assinatura MAIOR - 250x100
+                        max_width = 250
+                        max_height = 100
                         img.thumbnail((max_width, max_height), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
-                        img.save(img_buffer, format='PNG')
+                        img.save(img_buffer, format='PNG', quality=95)
                         img_buffer.seek(0)
                         
-                        c.drawImage(ImageReader(img_buffer), assinatura_x, assinatura_y - img.height + 30, 
+                        # Desenhar fundo branco para assinatura
+                        c.setFillColor(HexColor('#ffffff'))
+                        c.setStrokeColor(cor_linha)
+                        c.rect(assinatura_x - 5, img_y + 50 - 5, img.width + 10, img.height + 10, stroke=1, fill=1)
+                        
+                        c.drawImage(ImageReader(img_buffer), assinatura_x, img_y + 50, 
                                    width=img.width, height=img.height)
                         
                         # Legenda
                         c.setFillColor(cor_label)
-                        c.setFont("Helvetica", 7)
-                        c.drawString(assinatura_x, assinatura_y - img.height + 18, "Assinatura manuscrita digital")
-                    except:
-                        pass
+                        c.setFont("Helvetica", 8)
+                        c.drawString(assinatura_x, img_y + 35, "Assinatura manuscrita digital")
+                    except Exception as e:
+                        c.setFillColor(cor_label)
+                        c.setFont("Helvetica", 8)
+                        c.drawString(assinatura_x, img_y + 50, "Assinatura não disponível")
                 
                 y_pos -= box_height + 20
         
