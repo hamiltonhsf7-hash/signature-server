@@ -175,7 +175,36 @@ PAGINA_ASSINATURA = '''
             cursor: crosshair;
             touch-action: none;
             width: 100%;
-            height: 230px;  /* 15% maior que 200px */
+            height: 150px;  /* Mais retangular horizontalmente */
+        }
+        /* Modo tela cheia para assinatura */
+        .fullscreen-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.95);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .fullscreen-container canvas {
+            width: 95vw !important;
+            height: 60vh !important;
+            max-height: 400px;
+            background: #fff;
+            border-radius: 15px;
+        }
+        .fullscreen-container .botoes {
+            margin-top: 20px;
+        }
+        .fullscreen-container h3 {
+            color: #fff;
+            margin-bottom: 15px;
         }
         #video-selfie, #canvas-selfie {
             width: 100%;
@@ -963,7 +992,7 @@ def download_documento_original(token):
         cur = conn.cursor()
         
         cur.execute('''
-            SELECT d.arquivo_pdf, d.arquivo_nome
+            SELECT d.arquivo_base64, d.arquivo_nome
             FROM signatarios s
             JOIN documentos d ON s.doc_id = d.doc_id
             WHERE s.token = %s
@@ -973,10 +1002,11 @@ def download_documento_original(token):
         cur.close()
         conn.close()
         
-        if not row or not row['arquivo_pdf']:
+        if not row or not row['arquivo_base64']:
             return 'Documento não encontrado', 404
         
-        pdf_data = bytes(row['arquivo_pdf'])
+        # Decodificar base64 para bytes
+        pdf_data = base64.b64decode(row['arquivo_base64'])
         
         return Response(
             pdf_data,
@@ -1617,7 +1647,7 @@ def get_pdf_assinado(doc_id):
                 # Posição baseada no título da seção
                 selfie_x = 70
                 assinatura_x = 280  # Mais à esquerda, perto da selfie
-                img_y = images_y - 270  # Espaço para selfie 3/4 (240px altura + margem)
+                img_y = images_y - 300  # Espaço para selfie 3/4 (260px altura + margem)
                 
                 # SELFIE - Maior (150x150) e melhor qualidade
                 if sig['selfie_base64']:
@@ -1639,9 +1669,9 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Selfie formato 3/4 (mais alto que largo) - 180x240
-                        target_width = 180
-                        target_height = 240
+                        # Selfie formato 3:4 (proporção retrato) - 195x260
+                        target_width = 195
+                        target_height = 260
                         # Redimensionar mantendo proporção e cortando se necessário
                         img_ratio = img.width / img.height
                         target_ratio = target_width / target_height
@@ -1737,7 +1767,7 @@ def get_pdf_assinado(doc_id):
                 verificacao_url = f"{server_url}/verificar/{doc_id}"
                 
                 try:
-                    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=3, border=2)
+                    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=4, border=2)
                     qr.add_data(verificacao_url)
                     qr.make(fit=True)
                     qr_img = qr.make_image(fill_color="black", back_color="white")
@@ -1747,33 +1777,49 @@ def get_pdf_assinado(doc_id):
                     qr_img.save(qr_buffer, format='PNG')
                     qr_buffer.seek(0)
                     
-                    # Posicionar QR code abaixo das imagens (centralizado)
+                    # ========== SEÇÃO DE VERIFICAÇÃO ==========
+                    # Linha separadora
+                    verif_y = img_y - 25
+                    c.setStrokeColor(cor_linha)
+                    c.setLineWidth(0.5)
+                    c.line(60, verif_y, width - 60, verif_y)
+                    
+                    # Título da seção
+                    c.setFillColor(cor_label)
+                    c.setFont("Helvetica-Bold", 9)
+                    c.drawString(60, verif_y - 15, "Verificação de Autenticidade:")
+                    
+                    # Box de fundo para QR e link
+                    box_verif_y = verif_y - 110
+                    c.setFillColor(HexColor('#f5f5f5'))
+                    c.setStrokeColor(cor_linha)
+                    c.rect(55, box_verif_y, width - 110, 90, stroke=1, fill=1)
+                    
+                    # QR Code à esquerda
                     qr_size = 70
-                    qr_x = (width - qr_size) / 2
-                    qr_y = img_y - 30  # Abaixo da legenda da selfie
-                    
-                    # Fundo branco para o QR
-                    c.setFillColor(HexColor('#ffffff'))
-                    c.rect(qr_x - 5, qr_y - 5, qr_size + 10, qr_size + 10, stroke=0, fill=1)
-                    
+                    qr_x = 70
+                    qr_y = box_verif_y + 10
                     c.drawImage(ImageReader(qr_buffer), qr_x, qr_y, width=qr_size, height=qr_size)
                     
-                    # Link clicável abaixo do QR
+                    # Texto explicativo à direita do QR
+                    text_x = qr_x + qr_size + 20
+                    c.setFillColor(HexColor('#333333'))
+                    c.setFont("Helvetica-Bold", 9)
+                    c.drawString(text_x, qr_y + 60, "Escaneie o QR Code ou acesse o link:")
+                    
+                    # Link clicável (URL completa)
                     c.setFillColor(HexColor('#1565c0'))
+                    c.setFont("Helvetica", 8)
+                    c.drawString(text_x, qr_y + 45, verificacao_url)
+                    
+                    # Instruções
+                    c.setFillColor(HexColor('#666666'))
                     c.setFont("Helvetica", 7)
-                    link_text = "Verifique a autenticidade:"
-                    c.drawString(qr_x - 30, qr_y - 12, link_text)
+                    c.drawString(text_x, qr_y + 25, "Este link permite verificar a autenticidade")
+                    c.drawString(text_x, qr_y + 14, "deste documento e das assinaturas.")
                     
-                    # URL clicável
-                    c.setFillColor(HexColor('#2196f3'))
-                    c.setFont("Helvetica", 6)
-                    # Adicionar link clicável no PDF
-                    from reportlab.lib.utils import simpleSplit
-                    url_curta = verificacao_url.replace('https://', '').replace('http://', '')
-                    c.drawString(qr_x - 30, qr_y - 22, url_curta[:50])
-                    
-                    # Atualizar img_y para o cálculo do box incluir o QR
-                    img_y = qr_y - 30
+                    # Atualizar img_y para o cálculo do box incluir a verificação
+                    img_y = box_verif_y - 10
                     
                 except Exception as e:
                     # Se falhar o QR, continua sem ele
