@@ -1412,16 +1412,16 @@ def get_pdf_assinado(doc_id):
         
         for idx, sig in enumerate(signatarios):
             if sig['assinado']:
-                # Verificar se precisa de nova página (altura maior para novo layout)
-                if y_pos < 320:
+                # Verificar se precisa de nova página (altura estimada ~450-500px por signatário)
+                if y_pos < 500:
                     c.showPage()
                     y_pos = height - 50
                 
-                # Box do signatário (altura maior para acomodar imagens maiores)
+                # Box do signatário - será desenhado após calcular altura necessária
                 c.setStrokeColor(cor_linha)
                 c.setLineWidth(0.5)
-                box_height = 380  # Aumentado para caber imagens 50% maiores
-                c.rect(50, y_pos - box_height, width - 100, box_height, stroke=1, fill=0)
+                box_start_y = y_pos  # Guardar posição inicial
+                # NÃO desenhar o box aqui - desenhar depois de saber a altura
                 
                 # Nome do signatário (título do box)
                 c.setFillColor(cor_titulo)
@@ -1526,22 +1526,23 @@ def get_pdf_assinado(doc_id):
                     c.drawString(col_x + 125, info_y, loc[:60])
                     info_y -= 14
                 
-                # Linha separadora antes das imagens
+                # Linha separadora antes das imagens - posição baseada no último texto
                 c.setStrokeColor(cor_linha)
                 c.setLineWidth(0.5)
-                images_y = y_pos - box_height + 110
-                c.line(60, images_y + 15, width - 60, images_y + 15)
+                # Usar info_y que já está posicionado após o último texto
+                images_y = info_y - 10
+                c.line(60, images_y, width - 60, images_y)
                 
                 # Título da seção de imagens
                 c.setFillColor(cor_label)
                 c.setFont("Helvetica-Bold", 9)
-                c.drawString(60, images_y + 5, "Evidências de Identificação:")
+                c.drawString(60, images_y - 15, "Evidências de Identificação:")
                 
                 # Layout lado a lado: Selfie à esquerda, Assinatura à direita
-                # Posição mais baixa para não sobrepor texto
+                # Posição baseada no título da seção
                 selfie_x = 70
                 assinatura_x = width / 2 + 40
-                img_y = y_pos - box_height + 30  # Mais baixo no box
+                img_y = images_y - 250  # Espaço para as imagens (225px altura máxima + margem)
                 
                 # SELFIE - Maior (150x150) e melhor qualidade
                 if sig['selfie_base64']:
@@ -1635,8 +1636,14 @@ def get_pdf_assinado(doc_id):
                         c.setFillColor(cor_label)
                         c.setFont("Helvetica", 8)
                         c.drawString(assinatura_x, img_y + 50, "Assinatura não disponível")
+                # Calcular altura final do box e desenhá-lo
+                box_end_y = img_y - 20  # Margem inferior
+                box_height = box_start_y - box_end_y
+                c.setStrokeColor(cor_linha)
+                c.setLineWidth(0.5)
+                c.rect(50, box_end_y, width - 100, box_height, stroke=1, fill=0)
                 
-                y_pos -= box_height + 20
+                y_pos = box_end_y - 20  # Próximo signatário
         
         # Rodapé com texto legal
         c.setFillColor(cor_label)
