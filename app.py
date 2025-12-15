@@ -9,7 +9,7 @@ import json
 import hashlib
 import base64
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template_string, Response, redirect
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
@@ -174,7 +174,7 @@ PAGINA_ASSINATURA = '''
             cursor: crosshair;
             touch-action: none;
             width: 100%;
-            height: 200px;
+            height: 230px;  /* 15% maior que 200px */
         }
         #video-selfie, #canvas-selfie {
             width: 100%;
@@ -404,6 +404,14 @@ PAGINA_ASSINATURA = '''
                         <div class="sucesso">
                             <h2>✅ Documento Já Assinado</h2>
                             <p>Este documento foi assinado em ${data.data_assinatura}</p>
+                            <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
+                                <a href="/api/documento/${token}/download" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                    📄 Baixar Documento Original
+                                </a>
+                                <a href="/api/pdf_assinado_por_token/${token}" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                    ✅ Baixar Documento Assinado
+                                </a>
+                            </div>
                         </div>
                     `;
                     return;
@@ -788,7 +796,15 @@ PAGINA_ASSINATURA = '''
                         <div class="sucesso">
                             <h2>✅ Documento Assinado com Sucesso!</h2>
                             <p>Sua assinatura foi registrada em ${new Date().toLocaleString('pt-BR')}</p>
-                            <p style="margin-top: 15px; color: #aaa;">Você pode fechar esta página.</p>
+                            <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
+                                <a href="/api/documento/${token}/download" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                    📄 Baixar Documento Original
+                                </a>
+                                <a href="/api/pdf_assinado_por_token/${token}" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                    ✅ Baixar Documento Assinado
+                                </a>
+                            </div>
+                            <p style="margin-top: 20px; color: #aaa; font-size: 14px;">Você pode fechar esta página ou baixar os documentos acima.</p>
                         </div>
                     `;
                 } else {
@@ -934,6 +950,64 @@ def get_pdf(token):
             mimetype='application/pdf',
             headers={'Content-Disposition': f'inline; filename="{row["arquivo_nome"]}"'}
         )
+        
+    except Exception as e:
+        return f'Erro: {str(e)}', 500
+
+@app.route('/api/documento/<token>/download')
+def download_documento_original(token):
+    """Download do documento original (não assinado) pelo token do signatário"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''
+            SELECT d.arquivo_pdf, d.arquivo_nome
+            FROM signatarios s
+            JOIN documentos d ON s.doc_id = d.doc_id
+            WHERE s.token = %s
+        ''', (token,))
+        
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not row or not row['arquivo_pdf']:
+            return 'Documento não encontrado', 404
+        
+        pdf_data = bytes(row['arquivo_pdf'])
+        
+        return Response(
+            pdf_data,
+            mimetype='application/pdf',
+            headers={'Content-Disposition': f'attachment; filename="{row["arquivo_nome"]}"'}
+        )
+        
+    except Exception as e:
+        return f'Erro: {str(e)}', 500
+
+@app.route('/api/pdf_assinado_por_token/<token>')
+def download_pdf_assinado_por_token(token):
+    """Download do PDF assinado pelo token do signatário"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar doc_id pelo token
+        cur.execute('SELECT doc_id FROM signatarios WHERE token = %s', (token,))
+        row = cur.fetchone()
+        
+        if not row:
+            cur.close()
+            conn.close()
+            return 'Token inválido', 404
+        
+        doc_id = row['doc_id']
+        cur.close()
+        conn.close()
+        
+        # Redirecionar para o endpoint existente de PDF assinado
+        return redirect(f'/api/pdf_assinado/{doc_id}')
         
     except Exception as e:
         return f'Erro: {str(e)}', 500
@@ -1538,11 +1612,11 @@ def get_pdf_assinado(doc_id):
                 c.setFont("Helvetica-Bold", 9)
                 c.drawString(60, images_y - 15, "Evidências de Identificação:")
                 
-                # Layout lado a lado: Selfie à esquerda, Assinatura à direita
+                # Layout lado a lado: Selfie à esquerda, Assinatura à direita (mais perto da selfie)
                 # Posição baseada no título da seção
                 selfie_x = 70
-                assinatura_x = width / 2 + 40
-                img_y = images_y - 250  # Espaço para as imagens (225px altura máxima + margem)
+                assinatura_x = 280  # Mais à esquerda, perto da selfie
+                img_y = images_y - 270  # Espaço para selfie 3/4 (240px altura + margem)
                 
                 # SELFIE - Maior (150x150) e melhor qualidade
                 if sig['selfie_base64']:
@@ -1564,9 +1638,28 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Selfie 50% MAIOR - 225x225
-                        max_size = 225
-                        img.thumbnail((max_size, max_size), Image.LANCZOS)
+                        # Selfie formato 3/4 (mais alto que largo) - 180x240
+                        target_width = 180
+                        target_height = 240
+                        # Redimensionar mantendo proporção e cortando se necessário
+                        img_ratio = img.width / img.height
+                        target_ratio = target_width / target_height
+                        
+                        if img_ratio > target_ratio:
+                            # Imagem mais larga - ajustar pela altura
+                            new_height = target_height
+                            new_width = int(target_height * img_ratio)
+                        else:
+                            # Imagem mais alta - ajustar pela largura
+                            new_width = target_width
+                            new_height = int(target_width / img_ratio)
+                        
+                        img = img.resize((new_width, new_height), Image.LANCZOS)
+                        
+                        # Cortar para 180x240 centralizado
+                        left = (new_width - target_width) // 2
+                        top = (new_height - target_height) // 2
+                        img = img.crop((left, top, left + target_width, top + target_height))
                         
                         img_buffer = BytesIO()
                         img.save(img_buffer, format='JPEG', quality=95)
@@ -1611,8 +1704,8 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Assinatura 50% MAIOR - 375x150
-                        max_width = 375
+                        # Assinatura 15% maior horizontalmente - 430x150
+                        max_width = 430
                         max_height = 150
                         img.thumbnail((max_width, max_height), Image.LANCZOS)
                         
