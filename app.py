@@ -8,11 +8,18 @@ import os
 import json
 import hashlib
 import base64
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template_string, Response
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
+
+# Timezone Brasil (UTC-3)
+BRT = timezone(timedelta(hours=-3))
+
+def agora_brasil():
+    """Retorna datetime atual no fuso horário do Brasil (BRT)"""
+    return datetime.now(BRT)
 
 app = Flask(__name__)
 CORS(app)
@@ -74,8 +81,23 @@ def init_db():
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS longitude DECIMAL(11, 8)')
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS endereco_aproximado TEXT')
         cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS arquivo_hash VARCHAR(64)')
+        cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS pasta_id INTEGER DEFAULT 1')
     except:
         pass
+    
+    # Tabela de pastas para organizar documentos
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pastas (
+            id SERIAL PRIMARY KEY,
+            nome VARCHAR(100) NOT NULL,
+            pasta_pai_id INTEGER REFERENCES pastas(id) ON DELETE CASCADE,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            criado_por VARCHAR(100)
+        )
+    ''')
+    
+    # Criar pasta raiz se não existir
+    cur.execute("INSERT INTO pastas (id, nome, pasta_pai_id, criado_por) VALUES (1, 'Raiz', NULL, 'SISTEMA') ON CONFLICT (id) DO NOTHING")
     
     conn.commit()
     cur.close()
@@ -215,6 +237,60 @@ PAGINA_ASSINATURA = '''
             text-align: center;
             margin-top: 10px;
         }
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease-out;
+        }
+        .loading-overlay.hide {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(79, 195, 247, 0.2);
+            border-top: 4px solid #4fc3f7;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .loading-text {
+            color: #4fc3f7;
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 10px;
+        }
+        .loading-subtext {
+            color: #888;
+            font-size: 14px;
+            text-align: center;
+            max-width: 300px;
+        }
+        .pulse-dot {
+            display: inline-block;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        .pulse-dot:nth-child(2) { animation-delay: 0.2s; }
+        .pulse-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes pulse {
+            0%, 60%, 100% { opacity: 0.3; }
+            30% { opacity: 1; }
+        }
         @media (max-width: 600px) {
             .container { padding: 15px; }
             .botoes { flex-direction: column; }
@@ -223,12 +299,19 @@ PAGINA_ASSINATURA = '''
     </style>
 </head>
 <body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text">Carregando documento<span class="pulse-dot">.</span><span class="pulse-dot">.</span><span class="pulse-dot">.</span></div>
+        <div class="loading-subtext">Por favor, aguarde enquanto preparamos seu documento para assinatura.</div>
+    </div>
+
     <div class="container">
         <h1>📝 Assinatura Digital</h1>
         <p style="text-align: center; color: #aaa;">HAMI ERP - Sistema de Assinaturas</p>
         
         <div id="conteudo">
-            <p style="text-align: center; padding: 50px;">Carregando...</p>
+            <p style="text-align: center; padding: 50px;">Inicializando...</p>
         </div>
     </div>
 
@@ -241,10 +324,20 @@ PAGINA_ASSINATURA = '''
         let localizacao = null;
         let videoStream = null;
 
+        function hideLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.add('hide');
+                setTimeout(() => overlay.style.display = 'none', 500);
+            }
+        }
+
         async function carregarDocumento() {
             try {
                 const resp = await fetch(`/api/documento/${token}`);
                 const data = await resp.json();
+                
+                hideLoading(); // Esconde loading após carregar dados
                 
                 if (data.erro) {
                     document.getElementById('conteudo').innerHTML = `
@@ -319,6 +412,7 @@ PAGINA_ASSINATURA = '''
                 obterLocalizacao();
                 
             } catch (e) {
+                hideLoading(); // Esconde loading mesmo em caso de erro
                 document.getElementById('conteudo').innerHTML = `
                     <div class="erro">
                         <h2>❌ Erro de Conexão</h2>
@@ -604,7 +698,7 @@ def index():
 @app.route('/health')
 def health():
     """Health check"""
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+    return jsonify({'status': 'ok', 'timestamp': agora_brasil().isoformat()})
 
 @app.route('/assinar/<token>')
 def pagina_assinatura(token):
@@ -728,7 +822,7 @@ def assinar():
             assinatura_base64,
             selfie_base64,
             request.remote_addr,
-            datetime.now(),
+            agora_brasil(),
             request.headers.get('User-Agent', ''),
             latitude,
             longitude,
@@ -755,6 +849,7 @@ def criar_documento():
         arquivo_base64 = data.get('arquivo_base64', '')
         signatarios = data.get('signatarios', [])
         criado_por = data.get('criado_por', 'sistema')
+        pasta_id = data.get('pasta_id', 1)  # Default para pasta raiz
         
         if not arquivo_base64 or not signatarios:
             return jsonify({'erro': 'Dados incompletos'})
@@ -769,11 +864,11 @@ def criar_documento():
         conn = get_db()
         cur = conn.cursor()
         
-        # Inserir documento com hash
+        # Inserir documento com hash e pasta_id
         cur.execute('''
-            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por))
+            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id))
         
         # Inserir signatários
         links = []
@@ -950,6 +1045,162 @@ def listar_documentos():
             })
         
         return jsonify({'documentos': documentos})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+# ==================== API DE PASTAS ====================
+
+@app.route('/api/pastas')
+def listar_pastas():
+    """Lista todas as pastas"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''
+            SELECT id, nome, pasta_pai_id, criado_em, criado_por
+            FROM pastas
+            ORDER BY pasta_pai_id NULLS FIRST, nome
+        ''')
+        
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        pastas = []
+        for row in rows:
+            pastas.append({
+                'id': row['id'],
+                'nome': row['nome'],
+                'pasta_pai_id': row['pasta_pai_id'],
+                'criado_em': row['criado_em'].strftime('%d/%m/%Y %H:%M') if row['criado_em'] else '',
+                'criado_por': row['criado_por']
+            })
+        
+        return jsonify({'pastas': pastas})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+@app.route('/api/pastas', methods=['POST'])
+def criar_pasta():
+    """Cria uma nova pasta"""
+    try:
+        data = request.json
+        nome = data.get('nome', '').strip()
+        pasta_pai_id = data.get('pasta_pai_id', 1)
+        criado_por = data.get('criado_por', 'sistema')
+        
+        if not nome:
+            return jsonify({'erro': 'Nome da pasta é obrigatório'})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''
+            INSERT INTO pastas (nome, pasta_pai_id, criado_por)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        ''', (nome, pasta_pai_id if pasta_pai_id else None, criado_por))
+        
+        pasta_id = cur.fetchone()['id']
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'sucesso': True, 'pasta_id': pasta_id})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+@app.route('/api/pastas/<int:pasta_id>', methods=['PUT'])
+def renomear_pasta(pasta_id):
+    """Renomeia uma pasta"""
+    try:
+        if pasta_id == 1:
+            return jsonify({'erro': 'Não é possível renomear a pasta raiz'})
+        
+        data = request.json
+        novo_nome = data.get('nome', '').strip()
+        
+        if not novo_nome:
+            return jsonify({'erro': 'Nome da pasta é obrigatório'})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('UPDATE pastas SET nome = %s WHERE id = %s', (novo_nome, pasta_id))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'sucesso': True})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+@app.route('/api/pastas/<int:pasta_id>', methods=['DELETE'])
+def excluir_pasta(pasta_id):
+    """Exclui uma pasta (apenas se estiver vazia)"""
+    try:
+        if pasta_id == 1:
+            return jsonify({'erro': 'Não é possível excluir a pasta raiz'})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Verificar se há documentos na pasta
+        cur.execute('SELECT COUNT(*) as count FROM documentos WHERE pasta_id = %s', (pasta_id,))
+        if cur.fetchone()['count'] > 0:
+            cur.close()
+            conn.close()
+            return jsonify({'erro': 'Pasta contém documentos. Mova-os antes de excluir.'})
+        
+        # Verificar se há subpastas
+        cur.execute('SELECT COUNT(*) as count FROM pastas WHERE pasta_pai_id = %s', (pasta_id,))
+        if cur.fetchone()['count'] > 0:
+            cur.close()
+            conn.close()
+            return jsonify({'erro': 'Pasta contém subpastas. Exclua-as primeiro.'})
+        
+        cur.execute('DELETE FROM pastas WHERE id = %s', (pasta_id,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'sucesso': True})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+@app.route('/api/documentos/<doc_id>/mover', methods=['POST'])
+def mover_documento(doc_id):
+    """Move um documento para outra pasta"""
+    try:
+        data = request.json
+        pasta_destino_id = data.get('pasta_id', 1)
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Verificar se a pasta destino existe
+        cur.execute('SELECT id FROM pastas WHERE id = %s', (pasta_destino_id,))
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({'erro': 'Pasta destino não encontrada'})
+        
+        cur.execute('UPDATE documentos SET pasta_id = %s WHERE doc_id = %s', (pasta_destino_id, doc_id))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'sucesso': True})
         
     except Exception as e:
         return jsonify({'erro': str(e)})
