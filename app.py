@@ -1011,6 +1011,51 @@ def status_documento(doc_id):
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+@app.route('/api/documento/<token>/download')
+def download_documento(token):
+    """Baixa o PDF do documento assinado"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento pelo token do signatário
+        cur.execute('''
+            SELECT d.arquivo_base64, d.arquivo_nome, d.doc_id
+            FROM signatarios s
+            JOIN documentos d ON s.doc_id = d.doc_id
+            WHERE s.token = %s
+        ''', (token,))
+        
+        row = cur.fetchone()
+        
+        # Se não encontrou pelo token do signatário, tentar pelo doc_id
+        if not row:
+            cur.execute('''
+                SELECT arquivo_base64, arquivo_nome, doc_id
+                FROM documentos WHERE doc_id = %s
+            ''', (token,))
+            row = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        if not row or not row['arquivo_base64']:
+            return jsonify({'erro': 'Documento não encontrado'}), 404
+        
+        pdf_data = base64.b64decode(row['arquivo_base64'])
+        
+        return Response(
+            pdf_data,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="ASSINADO_{row["arquivo_nome"]}"',
+                'Content-Type': 'application/pdf'
+            }
+        )
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
 @app.route('/api/documentos')
 def listar_documentos():
     """Lista todos os documentos"""
