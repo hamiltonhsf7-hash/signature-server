@@ -1013,13 +1013,14 @@ def status_documento(doc_id):
 
 @app.route('/api/pdf_assinado/<doc_id>')
 def get_pdf_assinado(doc_id):
-    """Gera e retorna PDF com assinaturas aplicadas"""
+    """Gera e retorna PDF com assinaturas aplicadas - Layout estilo ZapSign"""
     try:
         from io import BytesIO
         from PyPDF2 import PdfReader, PdfWriter
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfgen import canvas
         from reportlab.lib.utils import ImageReader
+        from reportlab.lib.colors import HexColor
         from PIL import Image
         
         conn = get_db()
@@ -1037,10 +1038,10 @@ def get_pdf_assinado(doc_id):
             conn.close()
             return jsonify({'erro': 'Documento não encontrado'}), 404
         
-        # Buscar signatários que assinaram
+        # Buscar signatários que assinaram (incluindo todos os campos)
         cur.execute('''
-            SELECT nome, email, cpf, assinado, assinatura_base64, selfie_base64,
-                   data_assinatura, ip_assinatura, latitude, longitude
+            SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                   data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
             FROM signatarios WHERE doc_id = %s
         ''', (doc_id,))
         signatarios = cur.fetchall()
@@ -1069,75 +1070,152 @@ def get_pdf_assinado(doc_id):
         c = canvas.Canvas(sig_buffer, pagesize=A4)
         width, height = A4
         
-        # Cabeçalho
-        c.setFont("Helvetica-Bold", 16)
+        # Cores
+        cor_titulo = HexColor('#1a1a1a')
+        cor_label = HexColor('#666666')
+        cor_valor = HexColor('#000000')
+        cor_linha = HexColor('#cccccc')
+        
+        # Cabeçalho com título
+        c.setFillColor(cor_titulo)
+        c.setFont("Helvetica-Bold", 18)
         c.drawString(50, height - 50, "FOLHA DE ASSINATURAS DIGITAIS")
         
+        # Informações do documento
+        c.setFillColor(cor_label)
         c.setFont("Helvetica", 10)
-        c.drawString(50, height - 70, f"Documento: {doc['titulo'] or doc['arquivo_nome']}")
-        c.drawString(50, height - 85, f"Hash SHA-256: {doc['arquivo_hash'][:32]}...")
-        c.drawString(50, height - 100, f"Criado em: {doc['criado_em'].strftime('%d/%m/%Y %H:%M:%S') if doc['criado_em'] else ''}")
+        c.drawString(50, height - 75, "Documento:")
+        c.setFillColor(cor_valor)
+        c.drawString(120, height - 75, f"{doc['titulo'] or doc['arquivo_nome']}")
         
-        c.line(50, height - 115, width - 50, height - 115)
+        c.setFillColor(cor_label)
+        c.drawString(50, height - 90, "Hash SHA-256:")
+        c.setFillColor(cor_valor)
+        c.setFont("Helvetica", 8)
+        c.drawString(130, height - 90, f"{doc['arquivo_hash']}")
+        
+        c.setFont("Helvetica", 10)
+        c.setFillColor(cor_label)
+        c.drawString(50, height - 105, "Criado em:")
+        c.setFillColor(cor_valor)
+        criado_str = doc['criado_em'].strftime('%d/%m/%Y às %H:%M:%S') if doc['criado_em'] else ''
+        c.drawString(115, height - 105, criado_str)
+        
+        c.setFillColor(cor_label)
+        c.drawString(50, height - 120, "Última atualização em:")
+        c.setFillColor(cor_valor)
+        c.drawString(175, height - 120, agora_brasil().strftime('%d/%m/%Y às %H:%M:%S'))
+        
+        # Linha separadora
+        c.setStrokeColor(cor_linha)
+        c.setLineWidth(1)
+        c.line(50, height - 135, width - 50, height - 135)
         
         # Posição inicial para assinaturas
-        y_pos = height - 150
+        y_pos = height - 160
         
-        for sig in signatarios:
+        for idx, sig in enumerate(signatarios):
             if sig['assinado']:
-                # Nome do signatário
-                c.setFont("Helvetica-Bold", 11)
-                c.drawString(50, y_pos, f"Signatário: {sig['nome']}")
-                y_pos -= 15
+                # Verificar se precisa de nova página
+                if y_pos < 250:
+                    c.showPage()
+                    y_pos = height - 50
+                
+                # Box do signatário
+                c.setStrokeColor(cor_linha)
+                c.setLineWidth(0.5)
+                box_height = 200
+                c.rect(50, y_pos - box_height, width - 100, box_height, stroke=1, fill=0)
+                
+                # Nome do signatário (título do box)
+                c.setFillColor(cor_titulo)
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(60, y_pos - 20, f"Signatário: {sig['nome']}")
+                
+                # Coluna esquerda - Informações
+                col_x = 60
+                info_y = y_pos - 40
                 
                 c.setFont("Helvetica", 9)
+                
+                # Email
                 if sig['email']:
-                    c.drawString(50, y_pos, f"Email: {sig['email']}")
-                    y_pos -= 12
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Email:")
+                    c.setFillColor(cor_valor)
+                    c.drawString(col_x + 40, info_y, sig['email'])
+                    info_y -= 14
+                
+                # CPF
                 if sig['cpf']:
-                    c.drawString(50, y_pos, f"CPF: {sig['cpf']}")
-                    y_pos -= 12
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "CPF:")
+                    c.setFillColor(cor_valor)
+                    c.drawString(col_x + 40, info_y, sig['cpf'])
+                    info_y -= 14
+                
+                # Telefone
+                if sig.get('telefone'):
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Telefone:")
+                    c.setFillColor(cor_valor)
+                    c.drawString(col_x + 55, info_y, sig['telefone'])
+                    info_y -= 14
+                
+                # Data e hora da assinatura
                 if sig['data_assinatura']:
-                    c.drawString(50, y_pos, f"Data: {sig['data_assinatura'].strftime('%d/%m/%Y %H:%M:%S')}")
-                    y_pos -= 12
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Data e hora da assinatura:")
+                    c.setFillColor(cor_valor)
+                    data_str = sig['data_assinatura'].strftime('%d/%m/%Y às %H:%M:%S')
+                    c.drawString(col_x + 130, info_y, data_str)
+                    info_y -= 14
+                
+                # Token
+                if sig.get('token'):
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Token:")
+                    c.setFillColor(cor_valor)
+                    c.setFont("Helvetica", 7)
+                    c.drawString(col_x + 40, info_y, sig['token'])
+                    c.setFont("Helvetica", 9)
+                    info_y -= 14
+                
+                # IP
                 if sig['ip_assinatura']:
-                    c.drawString(50, y_pos, f"IP: {sig['ip_assinatura']}")
-                    y_pos -= 12
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "IP real do dispositivo:")
+                    c.setFillColor(cor_valor)
+                    c.drawString(col_x + 115, info_y, sig['ip_assinatura'])
+                    info_y -= 14
+                
+                # Dispositivo (User Agent)
+                if sig.get('user_agent'):
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Dispositivo:")
+                    c.setFillColor(cor_valor)
+                    c.setFont("Helvetica", 7)
+                    # Truncar user agent se muito longo
+                    ua = sig['user_agent'][:80] + '...' if len(sig['user_agent']) > 80 else sig['user_agent']
+                    c.drawString(col_x + 60, info_y, ua)
+                    c.setFont("Helvetica", 9)
+                    info_y -= 14
+                
+                # Localização
                 if sig['latitude'] and sig['longitude']:
-                    c.drawString(50, y_pos, f"Localização: {sig['latitude']}, {sig['longitude']}")
-                    y_pos -= 12
+                    c.setFillColor(cor_label)
+                    c.drawString(col_x, info_y, "Localização aproximada:")
+                    c.setFillColor(cor_valor)
+                    loc = f"{sig['latitude']}, {sig['longitude']}"
+                    if sig.get('endereco_aproximado'):
+                        loc = sig['endereco_aproximado']
+                    c.drawString(col_x + 120, info_y, loc[:50])
+                    info_y -= 14
                 
-                y_pos -= 5
+                # Coluna direita - Selfie (MAIOR - 120x120)
+                selfie_x = width - 180
+                selfie_y = y_pos - 145
                 
-                # Desenhar imagem de assinatura
-                if sig['assinatura_base64']:
-                    try:
-                        # Remover prefixo data:image/png;base64, se existir
-                        img_data = sig['assinatura_base64']
-                        if ',' in img_data:
-                            img_data = img_data.split(',')[1]
-                        
-                        img_bytes = base64.b64decode(img_data)
-                        img = Image.open(BytesIO(img_bytes))
-                        
-                        # Redimensionar mantendo proporção
-                        max_width = 150
-                        max_height = 60
-                        img.thumbnail((max_width, max_height), Image.LANCZOS)
-                        
-                        # Desenhar no canvas
-                        img_buffer = BytesIO()
-                        img.save(img_buffer, format='PNG')
-                        img_buffer.seek(0)
-                        
-                        c.drawImage(ImageReader(img_buffer), 50, y_pos - img.height, 
-                                   width=img.width, height=img.height)
-                        y_pos -= img.height + 10
-                    except Exception as e:
-                        c.drawString(50, y_pos, f"[Erro ao carregar assinatura: {str(e)[:50]}]")
-                        y_pos -= 15
-                
-                # Desenhar selfie (menor)
                 if sig['selfie_base64']:
                     try:
                         img_data = sig['selfie_base64']
@@ -1147,32 +1225,69 @@ def get_pdf_assinado(doc_id):
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(BytesIO(img_bytes))
                         
-                        max_width = 60
-                        max_height = 60
-                        img.thumbnail((max_width, max_height), Image.LANCZOS)
+                        # Selfie MAIOR - 120x120
+                        max_size = 120
+                        img.thumbnail((max_size, max_size), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
-                        img.save(img_buffer, format='JPEG')
+                        img.save(img_buffer, format='JPEG', quality=85)
                         img_buffer.seek(0)
                         
-                        c.drawImage(ImageReader(img_buffer), 220, y_pos, 
+                        c.drawImage(ImageReader(img_buffer), selfie_x, selfie_y, 
                                    width=img.width, height=img.height)
+                        
+                        # Legenda da selfie
+                        c.setFillColor(cor_label)
+                        c.setFont("Helvetica", 7)
+                        c.drawString(selfie_x, selfie_y - 10, "Foto de identificação")
                     except:
                         pass
                 
-                y_pos -= 20
-                c.line(50, y_pos, width - 50, y_pos)
-                y_pos -= 20
+                # Assinatura manuscrita
+                assinatura_x = 60
+                assinatura_y = y_pos - box_height + 50
                 
-                # Nova página se necessário
-                if y_pos < 100:
-                    c.showPage()
-                    y_pos = height - 50
+                if sig['assinatura_base64']:
+                    try:
+                        img_data = sig['assinatura_base64']
+                        if ',' in img_data:
+                            img_data = img_data.split(',')[1]
+                        
+                        img_bytes = base64.b64decode(img_data)
+                        img = Image.open(BytesIO(img_bytes))
+                        
+                        max_width = 200
+                        max_height = 70
+                        img.thumbnail((max_width, max_height), Image.LANCZOS)
+                        
+                        img_buffer = BytesIO()
+                        img.save(img_buffer, format='PNG')
+                        img_buffer.seek(0)
+                        
+                        c.drawImage(ImageReader(img_buffer), assinatura_x, assinatura_y - img.height + 30, 
+                                   width=img.width, height=img.height)
+                        
+                        # Legenda
+                        c.setFillColor(cor_label)
+                        c.setFont("Helvetica", 7)
+                        c.drawString(assinatura_x, assinatura_y - img.height + 18, "Assinatura manuscrita digital")
+                    except:
+                        pass
+                
+                y_pos -= box_height + 20
         
-        # Rodapé
+        # Rodapé com texto legal
+        c.setFillColor(cor_label)
         c.setFont("Helvetica", 8)
-        c.drawString(50, 30, "Documento assinado digitalmente via HAMI ERP - Sistema de Assinaturas Digitais")
-        c.drawString(50, 18, f"Gerado em: {agora_brasil().strftime('%d/%m/%Y %H:%M:%S')} (Horário de Brasília)")
+        
+        # Linha separadora do rodapé
+        c.setStrokeColor(cor_linha)
+        c.line(50, 60, width - 50, 60)
+        
+        # Texto legal
+        c.drawString(50, 45, "Assinaturas eletrônicas e físicas têm igual validade legal, conforme MP 2.200-2/2001 e Lei 14.063/2020.")
+        c.drawString(50, 33, "Documento assinado digitalmente via HAMI ERP - Sistema de Assinaturas Digitais")
+        c.drawString(50, 21, f"Gerado em: {agora_brasil().strftime('%d/%m/%Y às %H:%M:%S')} (Horário de Brasília)")
         
         c.save()
         
@@ -1200,6 +1315,7 @@ def get_pdf_assinado(doc_id):
         return jsonify({'erro': f'Dependências não instaladas: {e}'}), 500
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
 
 @app.route('/api/documento/<token>/download')
 def download_documento(token):
