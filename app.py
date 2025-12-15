@@ -1006,6 +1006,44 @@ def assinar():
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+# ==================== ENDPOINT TEMPORÁRIO DE LIMPEZA ====================
+# REMOVER APÓS USO!
+@app.route('/api/limpar_tudo', methods=['POST'])
+def limpar_tudo():
+    """ENDPOINT TEMPORÁRIO - Remove todos os documentos e signatários"""
+    try:
+        # Chave secreta para evitar uso não autorizado
+        data = request.json or {}
+        chave = data.get('chave', '')
+        
+        if chave != 'LIMPAR_DADOS_2024':
+            return jsonify({'erro': 'Chave de segurança inválida'}), 403
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Limpar na ordem correta (foreign keys)
+        cur.execute("DELETE FROM signatarios")
+        cur.execute("DELETE FROM documentos")
+        cur.execute("DELETE FROM pastas WHERE id > 1")  # Manter pasta raiz
+        
+        # Resetar sequências
+        cur.execute("ALTER SEQUENCE signatarios_id_seq RESTART WITH 1")
+        cur.execute("ALTER SEQUENCE documentos_id_seq RESTART WITH 1")
+        cur.execute("ALTER SEQUENCE pastas_id_seq RESTART WITH 2")
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'sucesso': True,
+            'mensagem': 'Todos os dados foram limpos com sucesso!'
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
 @app.route('/api/validar_signatario', methods=['POST'])
 def validar_signatario():
     """Valida CPF e data de nascimento do signatário antes de permitir assinatura"""
