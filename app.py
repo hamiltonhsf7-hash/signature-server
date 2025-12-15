@@ -1105,10 +1105,24 @@ def criar_documento():
         for sig in signatarios:
             token = hashlib.sha256(f"{doc_id}{sig['nome']}{datetime.now().isoformat()}".encode()).hexdigest()[:32]
             
+            # Tratar data_nascimento vazia ou inválida
+            data_nasc = sig.get('data_nascimento', '')
+            if data_nasc and data_nasc.strip():
+                # Tentar converter formato DD/MM/YYYY para YYYY-MM-DD (PostgreSQL)
+                try:
+                    if '/' in data_nasc:
+                        partes = data_nasc.strip().split('/')
+                        if len(partes) == 3:
+                            data_nasc = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                except:
+                    data_nasc = None
+            else:
+                data_nasc = None
+            
             cur.execute('''
                 INSERT INTO signatarios (doc_id, nome, email, cpf, telefone, token, data_nascimento)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token, sig.get('data_nascimento')))
+            ''', (doc_id, sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token, data_nasc))
             
             base_url = request.host_url.rstrip('/')
             link = f"{base_url}/assinar/{token}"
