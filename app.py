@@ -430,7 +430,7 @@ PAGINA_ASSINATURA = '''
                         </div>
                         <div class="form-group">
                             <label for="input-nascimento">Data de Nascimento</label>
-                            <input type="date" id="input-nascimento">
+                            <input type="text" id="input-nascimento" placeholder="DD/MM/AAAA" maxlength="10" oninput="formatarData(this)">
                         </div>
                         <div id="erro-validacao" class="erro-validacao"></div>
                         <div id="sucesso-validacao" class="sucesso-validacao"></div>
@@ -508,6 +508,19 @@ PAGINA_ASSINATURA = '''
             input.value = value;
         }
 
+        // Formatar Data com máscara DD/MM/AAAA
+        function formatarData(input) {
+            let value = input.value.replace(/\D/g, '');
+            if (value.length > 8) value = value.slice(0, 8);
+            
+            if (value.length > 4) {
+                value = value.replace(/^(\d{2})(\d{2})(\d{0,4})$/, '$1/$2/$3');
+            } else if (value.length > 2) {
+                value = value.replace(/^(\d{2})(\d{0,2})$/, '$1/$2');
+            }
+            input.value = value;
+        }
+
         // Validar dados do signatário
         async function validarDados() {
             const cpf = document.getElementById('input-cpf').value;
@@ -577,7 +590,7 @@ PAGINA_ASSINATURA = '''
             try {
                 const video = document.getElementById('video-selfie');
                 videoStream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'user', width: 640, height: 480 } 
+                    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }  // HD para melhor qualidade
                 });
                 video.srcObject = videoStream;
             } catch (e) {
@@ -610,7 +623,7 @@ PAGINA_ASSINATURA = '''
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
             
-            selfieBase64 = canvas.toDataURL('image/jpeg', 0.8);
+            selfieBase64 = canvas.toDataURL('image/jpeg', 0.95);  // Alta qualidade
             
             // Parar câmera e mostrar preview
             if (videoStream) {
@@ -1366,10 +1379,10 @@ def get_pdf_assinado(doc_id):
                     c.showPage()
                     y_pos = height - 50
                 
-                # Box do signatário (altura maior para acomodar imagens)
+                # Box do signatário (altura maior para acomodar imagens maiores)
                 c.setStrokeColor(cor_linha)
                 c.setLineWidth(0.5)
-                box_height = 280
+                box_height = 380  # Aumentado para caber imagens 50% maiores
                 c.rect(50, y_pos - box_height, width - 100, box_height, stroke=1, fill=0)
                 
                 # Nome do signatário (título do box)
@@ -1487,9 +1500,10 @@ def get_pdf_assinado(doc_id):
                 c.drawString(60, images_y + 5, "Evidências de Identificação:")
                 
                 # Layout lado a lado: Selfie à esquerda, Assinatura à direita
+                # Posição mais baixa para não sobrepor texto
                 selfie_x = 70
-                assinatura_x = width / 2 + 20
-                img_y = images_y - 100
+                assinatura_x = width / 2 + 40
+                img_y = y_pos - box_height + 30  # Mais baixo no box
                 
                 # SELFIE - Maior (150x150) e melhor qualidade
                 if sig['selfie_base64']:
@@ -1511,8 +1525,8 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Selfie MAIOR - 150x150
-                        max_size = 150
+                        # Selfie 50% MAIOR - 225x225
+                        max_size = 225
                         img.thumbnail((max_size, max_size), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
@@ -1558,9 +1572,9 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Assinatura MAIOR - 250x100
-                        max_width = 250
-                        max_height = 100
+                        # Assinatura 50% MAIOR - 375x150
+                        max_width = 375
+                        max_height = 150
                         img.thumbnail((max_width, max_height), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
