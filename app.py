@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify, render_template_string, Response, red
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
+import qrcode
 
 # Timezone Brasil (UTC-3)
 BRT = timezone(timedelta(hours=-3))
@@ -1729,6 +1730,55 @@ def get_pdf_assinado(doc_id):
                         c.setFillColor(cor_label)
                         c.setFont("Helvetica", 8)
                         c.drawString(assinatura_x, img_y + 50, "Assinatura não disponível")
+                
+                # ========== QR CODE DE VERIFICAÇÃO ==========
+                # Gerar QR Code com link de verificação
+                server_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://signature-server-jq9j.onrender.com')
+                verificacao_url = f"{server_url}/verificar/{doc_id}"
+                
+                try:
+                    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=3, border=2)
+                    qr.add_data(verificacao_url)
+                    qr.make(fit=True)
+                    qr_img = qr.make_image(fill_color="black", back_color="white")
+                    
+                    # Converter para bytes
+                    qr_buffer = BytesIO()
+                    qr_img.save(qr_buffer, format='PNG')
+                    qr_buffer.seek(0)
+                    
+                    # Posicionar QR code abaixo das imagens (centralizado)
+                    qr_size = 70
+                    qr_x = (width - qr_size) / 2
+                    qr_y = img_y - 30  # Abaixo da legenda da selfie
+                    
+                    # Fundo branco para o QR
+                    c.setFillColor(HexColor('#ffffff'))
+                    c.rect(qr_x - 5, qr_y - 5, qr_size + 10, qr_size + 10, stroke=0, fill=1)
+                    
+                    c.drawImage(ImageReader(qr_buffer), qr_x, qr_y, width=qr_size, height=qr_size)
+                    
+                    # Link clicável abaixo do QR
+                    c.setFillColor(HexColor('#1565c0'))
+                    c.setFont("Helvetica", 7)
+                    link_text = "Verifique a autenticidade:"
+                    c.drawString(qr_x - 30, qr_y - 12, link_text)
+                    
+                    # URL clicável
+                    c.setFillColor(HexColor('#2196f3'))
+                    c.setFont("Helvetica", 6)
+                    # Adicionar link clicável no PDF
+                    from reportlab.lib.utils import simpleSplit
+                    url_curta = verificacao_url.replace('https://', '').replace('http://', '')
+                    c.drawString(qr_x - 30, qr_y - 22, url_curta[:50])
+                    
+                    # Atualizar img_y para o cálculo do box incluir o QR
+                    img_y = qr_y - 30
+                    
+                except Exception as e:
+                    # Se falhar o QR, continua sem ele
+                    pass
+                
                 # Calcular altura final do box e desenhá-lo
                 box_end_y = img_y - 20  # Margem inferior
                 box_height = box_start_y - box_end_y
@@ -2014,6 +2064,196 @@ def mover_documento(doc_id):
         conn.close()
         
         return jsonify({'sucesso': True})
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+# ==================== VERIFICAÇÃO DE AUTENTICIDADE ====================
+
+PAGINA_VERIFICACAO = '''
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificação de Autenticidade - HAMI ERP</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.05);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+        }
+        h1 { color: #4fc3f7; margin-bottom: 10px; text-align: center; }
+        .status-valido {
+            background: linear-gradient(135deg, #1b5e20, #2e7d32);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .status-valido h2 { color: #81c784; font-size: 28px; }
+        .info-doc {
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        .info-doc h3 { color: #4fc3f7; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .info-row { display: flex; margin: 10px 0; }
+        .info-label { color: #aaa; width: 180px; flex-shrink: 0; }
+        .info-valor { color: #fff; }
+        .signatario {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid #4caf50;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .signatario.pendente {
+            background: rgba(255, 152, 0, 0.1);
+            border-color: #ff9800;
+        }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Verificação de Autenticidade</h1>
+        <div id="conteudo">Carregando...</div>
+    </div>
+    <script>
+        async function verificar() {
+            const docId = window.location.pathname.split('/').pop();
+            try {
+                const resp = await fetch('/api/verificar_dados/' + docId);
+                const data = await resp.json();
+                
+                if (data.erro) {
+                    document.getElementById('conteudo').innerHTML = `
+                        <div style="text-align: center; color: #f44336; padding: 40px;">
+                            <h2>❌ Documento Não Encontrado</h2>
+                            <p>Este documento não existe ou foi removido.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let signatariosHtml = '';
+                data.signatarios.forEach(sig => {
+                    const classe = sig.assinado ? 'signatario' : 'signatario pendente';
+                    const status = sig.assinado ? '✅ Assinado' : '⏳ Pendente';
+                    signatariosHtml += `
+                        <div class="${classe}">
+                            <div class="info-row"><span class="info-label">Nome:</span><span class="info-valor">${sig.nome}</span></div>
+                            <div class="info-row"><span class="info-label">CPF:</span><span class="info-valor">${sig.cpf}</span></div>
+                            <div class="info-row"><span class="info-label">Status:</span><span class="info-valor">${status}</span></div>
+                            ${sig.assinado ? `<div class="info-row"><span class="info-label">Data/Hora:</span><span class="info-valor">${sig.data_assinatura}</span></div>` : ''}
+                            ${sig.assinado ? `<div class="info-row"><span class="info-label">IP:</span><span class="info-valor">${sig.ip}</span></div>` : ''}
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('conteudo').innerHTML = `
+                    <div class="status-valido">
+                        <h2>✅ DOCUMENTO AUTÊNTICO</h2>
+                        <p>Este documento foi registrado no sistema HAMI ERP</p>
+                    </div>
+                    
+                    <div class="info-doc">
+                        <h3>📄 Informações do Documento</h3>
+                        <div class="info-row"><span class="info-label">Título:</span><span class="info-valor">${data.titulo}</span></div>
+                        <div class="info-row"><span class="info-label">Arquivo:</span><span class="info-valor">${data.arquivo_nome}</span></div>
+                        <div class="info-row"><span class="info-label">Hash SHA-256:</span><span class="info-valor" style="font-size: 11px; word-break: break-all;">${data.hash}</span></div>
+                        <div class="info-row"><span class="info-label">Criado em:</span><span class="info-valor">${data.criado_em}</span></div>
+                    </div>
+                    
+                    <div class="info-doc">
+                        <h3>👥 Signatários (${data.signatarios.length})</h3>
+                        ${signatariosHtml}
+                    </div>
+                    
+                    <div class="footer">
+                        <p>Verificação realizada em ${new Date().toLocaleString('pt-BR')}</p>
+                        <p>HAMI ERP - Sistema de Assinaturas Digitais</p>
+                    </div>
+                `;
+            } catch (e) {
+                document.getElementById('conteudo').innerHTML = `
+                    <div style="text-align: center; color: #f44336; padding: 40px;">
+                        <h2>❌ Erro de Conexão</h2>
+                        <p>Não foi possível verificar o documento.</p>
+                    </div>
+                `;
+            }
+        }
+        verificar();
+    </script>
+</body>
+</html>
+'''
+
+@app.route('/verificar/<int:doc_id>')
+def pagina_verificacao(doc_id):
+    """Página de verificação de autenticidade do documento"""
+    return render_template_string(PAGINA_VERIFICACAO)
+
+@app.route('/api/verificar_dados/<int:doc_id>')
+def verificar_dados(doc_id):
+    """Retorna dados do documento para verificação"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento
+        cur.execute('''
+            SELECT titulo, arquivo_nome, hash_documento, criado_em
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        
+        doc = cur.fetchone()
+        if not doc:
+            cur.close()
+            conn.close()
+            return jsonify({'erro': 'Documento não encontrado'})
+        
+        # Buscar signatários
+        cur.execute('''
+            SELECT nome, cpf, assinado, data_assinatura, ip_assinatura
+            FROM signatarios WHERE doc_id = %s
+        ''', (doc_id,))
+        
+        sigs = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        signatarios = []
+        for sig in sigs:
+            signatarios.append({
+                'nome': sig['nome'],
+                'cpf': sig['cpf'][:3] + '.***.***-' + sig['cpf'][-2:] if sig['cpf'] else '',  # Mascarar CPF
+                'assinado': sig['assinado'],
+                'data_assinatura': sig['data_assinatura'].strftime('%d/%m/%Y às %H:%M:%S') if sig['data_assinatura'] else '',
+                'ip': sig['ip_assinatura'] or ''
+            })
+        
+        return jsonify({
+            'titulo': doc['titulo'],
+            'arquivo_nome': doc['arquivo_nome'],
+            'hash': doc['hash_documento'],
+            'criado_em': doc['criado_em'].strftime('%d/%m/%Y às %H:%M:%S') if doc['criado_em'] else '',
+            'signatarios': signatarios
+        })
         
     except Exception as e:
         return jsonify({'erro': str(e)})
