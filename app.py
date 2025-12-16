@@ -2366,6 +2366,48 @@ def verificar_dados(doc_id):
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+# ==================== LIMPEZA DE DOCUMENTOS ====================
+
+@app.route('/api/limpar_documentos', methods=['POST'])
+def limpar_documentos():
+    """Remove todos os documentos e signatários vinculados, mantém pastas"""
+    try:
+        data = request.json or {}
+        chave = data.get('chave_confirmacao', '')
+        
+        # Chave de segurança para evitar limpeza acidental
+        if chave != 'CONFIRMAR_LIMPEZA_HAMI':
+            return jsonify({'erro': 'Chave de confirmação inválida'})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Contar antes de deletar
+        cur.execute('SELECT COUNT(*) as count FROM documentos')
+        total_docs = cur.fetchone()['count']
+        
+        cur.execute('SELECT COUNT(*) as count FROM signatarios')
+        total_sigs = cur.fetchone()['count']
+        
+        # Deletar signatários vinculados aos documentos
+        cur.execute('DELETE FROM signatarios')
+        
+        # Deletar documentos
+        cur.execute('DELETE FROM documentos')
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'sucesso': True,
+            'documentos_removidos': total_docs,
+            'signatarios_removidos': total_sigs
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
