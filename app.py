@@ -8,11 +8,8 @@ import os
 import json
 import hashlib
 import base64
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template_string, Response, redirect
 from flask_cors import CORS
@@ -34,12 +31,9 @@ CORS(app)
 # Configuração do banco de dados PostgreSQL
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
-# Configuração SMTP para envio de emails (Gmail)
-SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
-SMTP_USER = os.environ.get('SMTP_USER', '')
-SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
-EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
+# Configuração Resend para envio de emails
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', 'onboarding@resend.dev')
 EMAIL_ENABLED = os.environ.get('EMAIL_ENABLED', 'true').lower() == 'true'
 
 def get_db():
@@ -48,59 +42,50 @@ def get_db():
     return conn
 
 def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, nome_anexo=None):
-    """Envia email com notificação de assinatura e opcionalmente anexa PDF"""
-    print(f"[EMAIL] Iniciando envio para: {email_destino}")
-    print(f"[EMAIL] SMTP_USER: {SMTP_USER}, EMAIL_ENABLED: {EMAIL_ENABLED}")
+    """Envia email usando API do Resend (HTTP)"""
+    print(f"[EMAIL] Iniciando envio via Resend para: {email_destino}")
+    print(f"[EMAIL] RESEND_API_KEY configurada: {bool(RESEND_API_KEY)}, EMAIL_ENABLED: {EMAIL_ENABLED}")
     
-    if not EMAIL_ENABLED or not SMTP_USER or not SMTP_PASSWORD:
-        print(f"[EMAIL] Email desabilitado ou credenciais não configuradas. Destino: {email_destino}")
+    if not EMAIL_ENABLED or not RESEND_API_KEY:
+        print(f"[EMAIL] Email desabilitado ou API Key não configurada. Destino: {email_destino}")
         return False
     
     try:
-        print(f"[EMAIL] Montando mensagem...")
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
-        msg['To'] = email_destino
-        msg['Subject'] = assunto
+        print(f"[EMAIL] Montando payload...")
         
-        # Corpo do email em HTML
-        msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
+        # Payload para API do Resend
+        payload = {
+            "from": EMAIL_FROM,
+            "to": [email_destino],
+            "subject": assunto,
+            "html": corpo_html
+        }
         
-        # Anexar PDF se fornecido
-        if anexo_pdf and nome_anexo:
-            try:
-                # Se for base64, decodificar
-                if isinstance(anexo_pdf, str) and anexo_pdf.startswith('data:'):
-                    # Remover prefixo data:application/pdf;base64,
-                    pdf_data = base64.b64decode(anexo_pdf.split(',')[1])
-                elif isinstance(anexo_pdf, str):
-                    pdf_data = base64.b64decode(anexo_pdf)
-                else:
-                    pdf_data = anexo_pdf
-                
-                part = MIMEBase('application', 'pdf')
-                part.set_payload(pdf_data)
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{nome_anexo}"')
-                msg.attach(part)
-            except Exception as e:
-                print(f"[EMAIL] Erro ao anexar PDF: {e}")
+        # Converter para JSON
+        data = json.dumps(payload).encode('utf-8')
         
-        # Conectar e enviar com timeout
-        print(f"[EMAIL] Conectando ao SMTP: {SMTP_SERVER}:{SMTP_PORT}")
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
-        print(f"[EMAIL] Conectado. Iniciando TLS...")
-        server.starttls()
-        print(f"[EMAIL] TLS OK. Fazendo login...")
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        print(f"[EMAIL] Login OK. Enviando mensagem...")
-        server.send_message(msg)
-        print(f"[EMAIL] Mensagem enviada. Fechando conexão...")
-        server.quit()
+        # Criar request
+        print(f"[EMAIL] Enviando para API Resend...")
+        req = urllib.request.Request(
+            'https://api.resend.com/emails',
+            data=data,
+            headers={
+                'Authorization': f'Bearer {RESEND_API_KEY}',
+                'Content-Type': 'application/json'
+            },
+            method='POST'
+        )
         
-        print(f"[EMAIL] ✅ Email enviado com sucesso para: {email_destino}")
-        return True
+        # Enviar request
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            print(f"[EMAIL] ✅ Email enviado com sucesso! ID: {result.get('id', 'N/A')}")
+            return True
         
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8') if e.fp else 'No body'
+        print(f"[EMAIL] ❌ Erro HTTP {e.code}: {error_body}")
+        return False
     except Exception as e:
         import traceback
         print(f"[EMAIL] ❌ Erro ao enviar email: {e}")
