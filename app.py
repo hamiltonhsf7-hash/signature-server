@@ -98,6 +98,8 @@ def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, 
 def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=False):
     """Notifica o criador do documento sobre uma assinatura individual"""
     try:
+        print(f"[EMAIL] Iniciando notificação para doc_id: {doc_id}, signatario: {signatario_nome}")
+        
         conn = get_db()
         cur = conn.cursor()
         
@@ -108,7 +110,10 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
         ''', (doc_id,))
         doc = cur.fetchone()
         
+        print(f"[EMAIL] Documento encontrado: {doc}")
+        
         if not doc or not doc.get('email_criador'):
+            print(f"[EMAIL] Email criador não encontrado ou vazio para doc_id: {doc_id}")
             cur.close()
             conn.close()
             return False
