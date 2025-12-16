@@ -8,6 +8,11 @@ import os
 import json
 import hashlib
 import base64
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template_string, Response, redirect
 from flask_cors import CORS
@@ -28,10 +33,148 @@ CORS(app)
 # Configuração do banco de dados PostgreSQL
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
+# Configuração SMTP para envio de emails (Gmail)
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
+EMAIL_ENABLED = os.environ.get('EMAIL_ENABLED', 'true').lower() == 'true'
+
 def get_db():
     """Retorna conexão com o banco de dados"""
     conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return conn
+
+def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, nome_anexo=None):
+    """Envia email com notificação de assinatura e opcionalmente anexa PDF"""
+    if not EMAIL_ENABLED or not SMTP_USER or not SMTP_PASSWORD:
+        print(f"[EMAIL] Email desabilitado ou credenciais não configuradas. Destino: {email_destino}")
+        return False
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_FROM
+        msg['To'] = email_destino
+        msg['Subject'] = assunto
+        
+        # Corpo do email em HTML
+        msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
+        
+        # Anexar PDF se fornecido
+        if anexo_pdf and nome_anexo:
+            try:
+                # Se for base64, decodificar
+                if isinstance(anexo_pdf, str) and anexo_pdf.startswith('data:'):
+                    # Remover prefixo data:application/pdf;base64,
+                    pdf_data = base64.b64decode(anexo_pdf.split(',')[1])
+                elif isinstance(anexo_pdf, str):
+                    pdf_data = base64.b64decode(anexo_pdf)
+                else:
+                    pdf_data = anexo_pdf
+                
+                part = MIMEBase('application', 'pdf')
+                part.set_payload(pdf_data)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename="{nome_anexo}"')
+                msg.attach(part)
+            except Exception as e:
+                print(f"[EMAIL] Erro ao anexar PDF: {e}")
+        
+        # Conectar e enviar
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        
+        print(f"[EMAIL] Email enviado com sucesso para: {email_destino}")
+        return True
+        
+    except Exception as e:
+        print(f"[EMAIL] Erro ao enviar email: {e}")
+        return False
+
+def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=False):
+    """Notifica o criador do documento sobre uma assinatura individual"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento e email do criador
+        cur.execute('''
+            SELECT titulo, arquivo_nome, criado_por, email_criador
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        doc = cur.fetchone()
+        
+        if not doc or not doc.get('email_criador'):
+            cur.close()
+            conn.close()
+            return False
+        
+        # Buscar total e status dos signatários
+        cur.execute('''
+            SELECT COUNT(*) as total, 
+                   SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+            FROM signatarios WHERE doc_id = %s
+        ''', (doc_id,))
+        stats = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        total = stats['total']
+        assinados = stats['assinados']
+        
+        # Montar email
+        if todos_assinaram:
+            assunto = f"✅ Documento CONCLUÍDO: {doc['titulo'] or doc['arquivo_nome']}"
+            corpo = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h1 style="color: #4caf50; text-align: center;">✅ Documento Concluído!</h1>
+                    <p style="font-size: 16px; color: #333;">Olá <strong>{doc['criado_por']}</strong>,</p>
+                    <p style="font-size: 16px; color: #333;">Ótima notícia! <strong>Todos os signatários</strong> assinaram o documento:</p>
+                    <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #2e7d32;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                        <p style="margin: 10px 0 0; color: #388e3c;">Status: {assinados}/{total} assinaturas ✅</p>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">O documento assinado está disponível no módulo de Assinaturas do HAMI ERP.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                    <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
+                </div>
+            </body>
+            </html>
+            """
+        else:
+            assunto = f"📝 Nova Assinatura: {doc['titulo'] or doc['arquivo_nome']}"
+            corpo = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h1 style="color: #2196f3; text-align: center;">📝 Nova Assinatura Registrada</h1>
+                    <p style="font-size: 16px; color: #333;">Olá <strong>{doc['criado_por']}</strong>,</p>
+                    <p style="font-size: 16px; color: #333;">O signatário <strong>{signatario_nome}</strong> assinou o documento:</p>
+                    <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196f3;">
+                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                        <p style="margin: 10px 0 0; color: #1976d2;">Progresso: {assinados}/{total} assinaturas</p>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">Acompanhe o status completo no módulo de Assinaturas do HAMI ERP.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                    <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
+                </div>
+            </body>
+            </html>
+            """
+        
+        return enviar_email_assinatura(doc['email_criador'], assunto, corpo)
+        
+    except Exception as e:
+        print(f"[EMAIL] Erro ao notificar assinatura: {e}")
+        return False
+
 
 def init_db():
     """Inicializa tabelas do banco de dados"""
@@ -85,6 +228,7 @@ def init_db():
         cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS data_nascimento DATE')
         cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS arquivo_hash VARCHAR(64)')
         cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS pasta_id INTEGER DEFAULT 1')
+        cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS email_criador VARCHAR(255)')
     except:
         pass
     
@@ -1275,6 +1419,31 @@ def assinar():
             }
         )
         
+        # Verificar se todos os signatários assinaram
+        try:
+            conn2 = get_db()
+            cur2 = conn2.cursor()
+            cur2.execute('''
+                SELECT COUNT(*) as total, 
+                       SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+                FROM signatarios WHERE doc_id = %s
+            ''', (row['doc_id'],))
+            stats = cur2.fetchone()
+            cur2.close()
+            conn2.close()
+            
+            todos_assinaram = stats['total'] == stats['assinados']
+            
+            # Notificar criador do documento por email
+            # Email individual a cada assinatura + email quando todos assinarem
+            notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=False)
+            
+            if todos_assinaram:
+                # Enviar email especial quando todos assinaram
+                notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=True)
+        except Exception as e:
+            print(f"[EMAIL] Erro ao verificar/notificar: {e}")
+        
         return jsonify({'sucesso': True})
         
     except Exception as e:
@@ -1429,6 +1598,7 @@ def criar_documento():
         arquivo_base64 = data.get('arquivo_base64', '')
         signatarios = data.get('signatarios', [])
         criado_por = data.get('criado_por', 'sistema')
+        email_criador = data.get('email_criador', '')  # Email do usuário que criou o documento
         pasta_id = data.get('pasta_id', 1)  # Default para pasta raiz
         
         if not arquivo_base64 or not signatarios:
@@ -1444,11 +1614,11 @@ def criar_documento():
         conn = get_db()
         cur = conn.cursor()
         
-        # Inserir documento com hash e pasta_id
+        # Inserir documento com hash, pasta_id e email_criador
         cur.execute('''
-            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id))
+            INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id, email_criador)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id, email_criador))
         
         # Inserir signatários
         links = []
