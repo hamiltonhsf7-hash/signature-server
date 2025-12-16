@@ -1646,7 +1646,7 @@ def get_pdf_assinado(doc_id):
                 # Layout lado a lado: Selfie à esquerda, Assinatura à direita (mais perto da selfie)
                 # Posição baseada no título da seção
                 selfie_x = 70
-                assinatura_x = 280  # Mais à esquerda, perto da selfie
+                assinatura_x = 300  # Um pouco mais à direita
                 img_y = images_y - 300  # Espaço para selfie 3/4 (260px altura + margem)
                 
                 # SELFIE - Maior (150x150) e melhor qualidade
@@ -1735,8 +1735,8 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Assinatura 15% maior horizontalmente - 430x150
-                        max_width = 430
+                        # Assinatura 27% maior horizontalmente - 482x150 (+12% adicional)
+                        max_width = 482
                         max_height = 150
                         img.thumbnail((max_width, max_height), Image.LANCZOS)
                         
@@ -2249,12 +2249,12 @@ PAGINA_VERIFICACAO = '''
 </html>
 '''
 
-@app.route('/verificar/<int:doc_id>')
+@app.route('/verificar/<doc_id>')
 def pagina_verificacao(doc_id):
     """Página de verificação de autenticidade do documento"""
     return render_template_string(PAGINA_VERIFICACAO)
 
-@app.route('/api/verificar_dados/<int:doc_id>')
+@app.route('/api/verificar_dados/<doc_id>')
 def verificar_dados(doc_id):
     """Retorna dados do documento para verificação"""
     try:
@@ -2263,7 +2263,7 @@ def verificar_dados(doc_id):
         
         # Buscar documento
         cur.execute('''
-            SELECT titulo, arquivo_nome, hash_documento, criado_em
+            SELECT titulo, arquivo_nome, arquivo_hash, criado_em
             FROM documentos WHERE doc_id = %s
         ''', (doc_id,))
         
@@ -2296,7 +2296,7 @@ def verificar_dados(doc_id):
         return jsonify({
             'titulo': doc['titulo'],
             'arquivo_nome': doc['arquivo_nome'],
-            'hash': doc['hash_documento'],
+            'hash': doc['arquivo_hash'],
             'criado_em': doc['criado_em'].strftime('%d/%m/%Y às %H:%M:%S') if doc['criado_em'] else '',
             'signatarios': signatarios
         })
