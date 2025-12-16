@@ -99,12 +99,100 @@ def init_db():
         )
     ''')
     
+    # Tabela de log de auditoria com hash encadeado (blockchain-like)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS log_auditoria (
+            id SERIAL PRIMARY KEY,
+            doc_id VARCHAR(64),
+            acao VARCHAR(50) NOT NULL,
+            usuario VARCHAR(200),
+            ip VARCHAR(50),
+            user_agent TEXT,
+            dados_adicionais JSONB,
+            hash_anterior VARCHAR(64),
+            hash_registro VARCHAR(64),
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
     # Criar pasta raiz se não existir
     cur.execute("INSERT INTO pastas (id, nome, pasta_pai_id, criado_por) VALUES (1, 'Raiz', NULL, 'SISTEMA') ON CONFLICT (id) DO NOTHING")
+    
+    # Adicionar colunas de aceite de termos se não existirem
+    try:
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS aceite_termos BOOLEAN DEFAULT FALSE')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS data_aceite TIMESTAMP')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS hash_aceite VARCHAR(64)')
+    except:
+        pass
     
     conn.commit()
     cur.close()
     conn.close()
+
+# ==================== FUNÇÕES AUXILIARES ====================
+
+def validar_cpf(cpf):
+    """Valida CPF usando algoritmo oficial dos dígitos verificadores"""
+    # Remove caracteres não numéricos
+    cpf = ''.join(filter(str.isdigit, cpf))
+    
+    # CPF deve ter 11 dígitos
+    if len(cpf) != 11:
+        return False, "CPF deve ter 11 dígitos"
+    
+    # CPFs inválidos conhecidos (todos dígitos iguais)
+    cpfs_invalidos = [str(i) * 11 for i in range(10)]
+    if cpf in cpfs_invalidos:
+        return False, "CPF inválido"
+    
+    # Calcula primeiro dígito verificador
+    soma = sum(int(cpf[i]) * (10 - i) for i in range(9))
+    resto = soma % 11
+    digito1 = 0 if resto < 2 else 11 - resto
+    
+    if int(cpf[9]) != digito1:
+        return False, "CPF inválido - dígito verificador incorreto"
+    
+    # Calcula segundo dígito verificador
+    soma = sum(int(cpf[i]) * (11 - i) for i in range(10))
+    resto = soma % 11
+    digito2 = 0 if resto < 2 else 11 - resto
+    
+    if int(cpf[10]) != digito2:
+        return False, "CPF inválido - dígito verificador incorreto"
+    
+    return True, "CPF válido"
+
+def registrar_auditoria(doc_id, acao, usuario=None, ip=None, user_agent=None, dados_adicionais=None):
+    """Registra ação no log de auditoria com hash encadeado"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar hash do último registro para encadeamento
+        cur.execute('SELECT hash_registro FROM log_auditoria ORDER BY id DESC LIMIT 1')
+        row = cur.fetchone()
+        hash_anterior = row['hash_registro'] if row else '0' * 64
+        
+        # Criar dados para hash
+        timestamp = datetime.now(BRT).isoformat()
+        dados_hash = f"{doc_id}|{acao}|{usuario}|{ip}|{timestamp}|{hash_anterior}"
+        hash_registro = hashlib.sha256(dados_hash.encode()).hexdigest()
+        
+        # Inserir registro
+        cur.execute('''
+            INSERT INTO log_auditoria (doc_id, acao, usuario, ip, user_agent, dados_adicionais, hash_anterior, hash_registro)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (doc_id, acao, usuario, ip, user_agent, json.dumps(dados_adicionais) if dados_adicionais else None, hash_anterior, hash_registro))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Erro ao registrar auditoria: {e}")
+        return False
 
 # Inicializar banco ao iniciar
 try:
@@ -508,6 +596,16 @@ PAGINA_ASSINATURA = '''
                     <div class="etapa bloqueada" id="etapa-confirmar">
                         <h3>✅ Etapa 4: Confirme sua assinatura</h3>
                         <p class="localizacao-info" id="info-localizacao">📍 Obtendo localização...</p>
+                        
+                        <!-- Aviso de termos -->
+                        <div class="termos-aceite" style="background: rgba(76, 175, 80, 0.1); padding: 15px; border-radius: 10px; margin: 15px 0; border: 1px solid rgba(76, 175, 80, 0.4);">
+                            <p style="color: #a5d6a7; font-size: 14px; line-height: 1.6; margin: 0;">
+                                📋 <strong>Ao clicar em "Assinar Documento"</strong>, você declara que leu e compreendeu o documento acima, 
+                                concorda com seus termos e reconhece a validade jurídica desta assinatura eletrônica.
+                                <a href="#" onclick="abrirTermos(); return false;" style="color: #4fc3f7; text-decoration: underline;">Ver termos completos</a>
+                            </p>
+                        </div>
+                        
                         <div class="botoes">
                             <button class="btn btn-sucesso" id="btn-assinar" onclick="enviarAssinatura()" disabled>
                                 ✅ Assinar Documento
@@ -794,6 +892,39 @@ PAGINA_ASSINATURA = '''
             }
         }
 
+        // Abrir modal com termos completos
+        function abrirTermos() {
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;';
+            modal.innerHTML = `
+                <div style="background: #1a1a2e; border-radius: 15px; padding: 25px; max-width: 600px; max-height: 80vh; overflow-y: auto; border: 1px solid #4fc3f7;">
+                    <h2 style="color: #4fc3f7; margin-bottom: 15px;">📋 Termos de Assinatura Eletrônica</h2>
+                    <div style="color: #ccc; font-size: 14px; line-height: 1.7;">
+                        <p style="margin-bottom: 12px;"><strong>Ao assinar este documento, você declara que:</strong></p>
+                        <ul style="margin-left: 20px; margin-bottom: 15px;">
+                            <li>Leu e compreendeu integralmente o conteúdo do documento;</li>
+                            <li>Concorda com todos os termos e condições apresentados;</li>
+                            <li>Confirma que os dados pessoais informados são verdadeiros;</li>
+                            <li>Autoriza a coleta de dados de identificação (selfie, IP, localização) para fins de autenticação;</li>
+                        </ul>
+                        <p style="margin-bottom: 12px;"><strong>Base Legal:</strong></p>
+                        <p style="margin-bottom: 10px;">Esta assinatura eletrônica tem validade jurídica conforme:</p>
+                        <ul style="margin-left: 20px; margin-bottom: 15px;">
+                            <li><strong>Medida Provisória 2.200-2/2001</strong> - Institui a ICP-Brasil</li>
+                            <li><strong>Lei 14.063/2020</strong> - Dispõe sobre assinaturas eletrônicas</li>
+                            <li><strong>Art. 219 do Código Civil</strong> - Declarações de vontade</li>
+                        </ul>
+                        <p style="color: #a5d6a7;">As partes reconhecem que as assinaturas eletrônicas apostas têm a mesma validade e eficácia de assinaturas manuscritas.</p>
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove();" style="margin-top: 20px; padding: 12px 30px; background: #4fc3f7; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%;">
+                        Entendi
+                    </button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+        }
+
         async function enviarAssinatura() {
             if (!temAssinatura) {
                 alert('Por favor, desenhe sua assinatura.');
@@ -815,7 +946,9 @@ PAGINA_ASSINATURA = '''
                         assinatura: assinaturaBase64,
                         selfie: selfieBase64,
                         latitude: localizacao?.latitude,
-                        longitude: localizacao?.longitude
+                        longitude: localizacao?.longitude,
+                        aceite_termos: true,
+                        timestamp_aceite: new Date().toISOString()
                     })
                 });
                 
@@ -1045,7 +1178,7 @@ def download_pdf_assinado_por_token(token):
 
 @app.route('/api/assinar', methods=['POST'])
 def assinar():
-    """Processa a assinatura com selfie e localização"""
+    """Processa a assinatura com selfie, localização, aceite de termos e auditoria"""
     try:
         data = request.json
         token = data.get('token')
@@ -1053,6 +1186,8 @@ def assinar():
         selfie_base64 = data.get('selfie')
         latitude = data.get('latitude')
         longitude = data.get('longitude')
+        aceite_termos = True  # Aceite implícito: ao assinar, usuário aceita os termos
+        timestamp_aceite = data.get('timestamp_aceite') or datetime.now(BRT).isoformat()
         
         if not token or not assinatura_base64:
             return jsonify({'erro': 'Dados incompletos'})
@@ -1060,7 +1195,7 @@ def assinar():
         conn = get_db()
         cur = conn.cursor()
         
-        cur.execute('SELECT assinado FROM signatarios WHERE token = %s', (token,))
+        cur.execute('SELECT s.*, d.doc_id FROM signatarios s JOIN documentos d ON s.doc_id = d.doc_id WHERE s.token = %s', (token,))
         row = cur.fetchone()
         
         if not row:
@@ -1076,10 +1211,19 @@ def assinar():
         # Obter IP real (considerando proxies como Render, Cloudflare, etc.)
         ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
         if ip_real and ',' in ip_real:
-            # X-Forwarded-For pode ter múltiplos IPs, pegar o primeiro (IP original do cliente)
             ip_real = ip_real.split(',')[0].strip()
         
-        # Registrar assinatura com todos os dados
+        user_agent = request.headers.get('User-Agent', '')
+        
+        # Gerar hash do aceite de termos (evidência imutável)
+        dados_aceite = f"{token}|{row['nome']}|{row['cpf']}|{aceite_termos}|{timestamp_aceite}|{ip_real}"
+        hash_aceite = hashlib.sha256(dados_aceite.encode()).hexdigest()
+        
+        # Carimbo de tempo preciso (UTC e Brasil)
+        timestamp_utc = datetime.now(timezone.utc)
+        timestamp_brasil = agora_brasil()
+        
+        # Registrar assinatura com todos os dados incluindo aceite
         cur.execute('''
             UPDATE signatarios 
             SET assinado = TRUE, 
@@ -1089,22 +1233,47 @@ def assinar():
                 data_assinatura = %s,
                 user_agent = %s,
                 latitude = %s,
-                longitude = %s
+                longitude = %s,
+                aceite_termos = %s,
+                data_aceite = %s,
+                hash_aceite = %s
             WHERE token = %s
         ''', (
             assinatura_base64,
             selfie_base64,
             ip_real,
-            agora_brasil(),
-            request.headers.get('User-Agent', ''),
+            timestamp_brasil,
+            user_agent,
             latitude,
             longitude,
+            aceite_termos,
+            timestamp_brasil,
+            hash_aceite,
             token
         ))
         
         conn.commit()
         cur.close()
         conn.close()
+        
+        # Registrar no log de auditoria
+        registrar_auditoria(
+            doc_id=row['doc_id'],
+            acao='ASSINATURA_CONCLUIDA',
+            usuario=row['nome'],
+            ip=ip_real,
+            user_agent=user_agent,
+            dados_adicionais={
+                'signatario_id': row['id'],
+                'cpf_mascarado': row['cpf'][:3] + '.***.***-' + row['cpf'][-2:] if row['cpf'] else None,
+                'latitude': float(latitude) if latitude else None,
+                'longitude': float(longitude) if longitude else None,
+                'aceite_termos': aceite_termos,
+                'hash_aceite': hash_aceite,
+                'timestamp_utc': timestamp_utc.isoformat(),
+                'timestamp_brasil': timestamp_brasil.isoformat()
+            }
+        )
         
         return jsonify({'sucesso': True})
         
@@ -1164,13 +1333,20 @@ def validar_signatario():
         if not cpf_informado or not data_nascimento_informada:
             return jsonify({'erro': 'CPF e data de nascimento são obrigatórios', 'valido': False})
         
+        # Validar formato e dígitos verificadores do CPF
+        cpf_valido, msg_cpf = validar_cpf(cpf_informado)
+        if not cpf_valido:
+            return jsonify({'erro': msg_cpf, 'valido': False})
+        
         conn = get_db()
         cur = conn.cursor()
         
         # Buscar dados cadastrados do signatário
         cur.execute('''
-            SELECT cpf, data_nascimento, nome, assinado
-            FROM signatarios WHERE token = %s
+            SELECT s.cpf, s.data_nascimento, s.nome, s.assinado, d.doc_id
+            FROM signatarios s
+            JOIN documentos d ON s.doc_id = d.doc_id
+            WHERE s.token = %s
         ''', (token,))
         
         row = cur.fetchone()
@@ -1214,6 +1390,24 @@ def validar_signatario():
                     'erro': 'Data de nascimento não confere com o cadastro. Verifique os dados informados.',
                     'valido': False
                 })
+        
+        # Obter IP para auditoria
+        ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+        if ip_real and ',' in ip_real:
+            ip_real = ip_real.split(',')[0].strip()
+        
+        # Registrar auditoria de validação
+        registrar_auditoria(
+            doc_id=row['doc_id'],
+            acao='IDENTIDADE_VALIDADA',
+            usuario=row['nome'],
+            ip=ip_real,
+            user_agent=request.headers.get('User-Agent', ''),
+            dados_adicionais={
+                'cpf_mascarado': cpf_informado[:3] + '.***.***-' + cpf_informado[-2:],
+                'validacao_sucesso': True
+            }
+        )
         
         return jsonify({
             'valido': True,
@@ -1293,6 +1487,26 @@ def criar_documento():
         conn.commit()
         cur.close()
         conn.close()
+        
+        # Registrar auditoria de criação de documento
+        ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+        if ip_real and ',' in ip_real:
+            ip_real = ip_real.split(',')[0].strip()
+        
+        registrar_auditoria(
+            doc_id=doc_id,
+            acao='DOCUMENTO_CRIADO',
+            usuario=criado_por,
+            ip=ip_real,
+            user_agent=request.headers.get('User-Agent', ''),
+            dados_adicionais={
+                'titulo': titulo,
+                'arquivo_nome': arquivo_nome,
+                'arquivo_hash': arquivo_hash,
+                'total_signatarios': len(signatarios),
+                'pasta_id': pasta_id
+            }
+        )
         
         return jsonify({
             'sucesso': True,
