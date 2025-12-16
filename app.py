@@ -19,6 +19,7 @@ from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
 import qrcode
+import threading
 
 # Timezone Brasil (UTC-3)
 BRT = timezone(timedelta(hours=-3))
@@ -179,6 +180,18 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
     except Exception as e:
         print(f"[EMAIL] Erro ao notificar assinatura: {e}")
         return False
+
+def notificar_assinatura_async(doc_id, signatario_nome, todos_assinaram=False):
+    """Wrapper assíncrono para notificar_assinatura_individual - evita timeout do worker"""
+    def _enviar():
+        try:
+            notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram)
+        except Exception as e:
+            print(f"[EMAIL] Erro na thread de email: {e}")
+    
+    thread = threading.Thread(target=_enviar, daemon=True)
+    thread.start()
+    print(f"[EMAIL] Thread de notificação iniciada para doc_id: {doc_id}")
 
 
 def init_db():
@@ -1439,13 +1452,13 @@ def assinar():
             
             todos_assinaram = stats['total'] == stats['assinados']
             
-            # Notificar criador do documento por email
+            # Notificar criador do documento por email (assíncrono para evitar timeout)
             # Email individual a cada assinatura + email quando todos assinarem
-            notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=False)
+            notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=False)
             
             if todos_assinaram:
                 # Enviar email especial quando todos assinaram
-                notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=True)
+                notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=True)
         except Exception as e:
             print(f"[EMAIL] Erro ao verificar/notificar: {e}")
         
