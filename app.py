@@ -1949,9 +1949,9 @@ def get_pdf_assinado(doc_id):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Assinatura - tamanho reduzido para caber na tabela
-                        max_width = 380
-                        max_height = 120
+                        # Assinatura - tamanho ajustado para caber na tabela
+                        max_width = 437  # 380 + 15%
+                        max_height = 138  # 120 + 15%
                         img.thumbnail((max_width, max_height), Image.LANCZOS)
                         
                         img_buffer = BytesIO()
