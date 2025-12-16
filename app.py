@@ -49,11 +49,15 @@ def get_db():
 
 def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, nome_anexo=None):
     """Envia email com notificação de assinatura e opcionalmente anexa PDF"""
+    print(f"[EMAIL] Iniciando envio para: {email_destino}")
+    print(f"[EMAIL] SMTP_USER: {SMTP_USER}, EMAIL_ENABLED: {EMAIL_ENABLED}")
+    
     if not EMAIL_ENABLED or not SMTP_USER or not SMTP_PASSWORD:
         print(f"[EMAIL] Email desabilitado ou credenciais não configuradas. Destino: {email_destino}")
         return False
     
     try:
+        print(f"[EMAIL] Montando mensagem...")
         msg = MIMEMultipart()
         msg['From'] = EMAIL_FROM
         msg['To'] = email_destino
@@ -82,18 +86,25 @@ def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, 
             except Exception as e:
                 print(f"[EMAIL] Erro ao anexar PDF: {e}")
         
-        # Conectar e enviar
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        # Conectar e enviar com timeout
+        print(f"[EMAIL] Conectando ao SMTP: {SMTP_SERVER}:{SMTP_PORT}")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
+        print(f"[EMAIL] Conectado. Iniciando TLS...")
         server.starttls()
+        print(f"[EMAIL] TLS OK. Fazendo login...")
         server.login(SMTP_USER, SMTP_PASSWORD)
+        print(f"[EMAIL] Login OK. Enviando mensagem...")
         server.send_message(msg)
+        print(f"[EMAIL] Mensagem enviada. Fechando conexão...")
         server.quit()
         
-        print(f"[EMAIL] Email enviado com sucesso para: {email_destino}")
+        print(f"[EMAIL] ✅ Email enviado com sucesso para: {email_destino}")
         return True
         
     except Exception as e:
-        print(f"[EMAIL] Erro ao enviar email: {e}")
+        import traceback
+        print(f"[EMAIL] ❌ Erro ao enviar email: {e}")
+        traceback.print_exc()
         return False
 
 def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=False):
