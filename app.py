@@ -35,6 +35,8 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '')
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 EMAIL_FROM = os.environ.get('EMAIL_FROM', 'onboarding@resend.dev')
 EMAIL_ENABLED = os.environ.get('EMAIL_ENABLED', 'true').lower() == 'true'
+# Para testes: se configurado, todos os emails vão para este endereço
+EMAIL_TEST_OVERRIDE = os.environ.get('EMAIL_TEST_OVERRIDE', '')
 
 def get_db():
     """Retorna conexão com o banco de dados"""
@@ -51,12 +53,17 @@ def enviar_email_assinatura(email_destino, assunto, corpo_html, anexo_pdf=None, 
         return False
     
     try:
+        # Se EMAIL_TEST_OVERRIDE configurado, redireciona todos emails para teste
+        email_final = EMAIL_TEST_OVERRIDE if EMAIL_TEST_OVERRIDE else email_destino
+        if EMAIL_TEST_OVERRIDE:
+            print(f"[EMAIL] ⚠️ Modo teste: redirecionando de {email_destino} para {EMAIL_TEST_OVERRIDE}")
+        
         print(f"[EMAIL] Montando payload...")
         
         # Payload para API do Resend
         payload = {
             "from": EMAIL_FROM,
-            "to": [email_destino],
+            "to": [email_final],
             "subject": assunto,
             "html": corpo_html
         }
@@ -1031,22 +1038,55 @@ PAGINA_ASSINATURA = '''
         }
 
         function obterLocalizacao() {
+            const infoEl = document.getElementById('info-localizacao');
+            
+            // Função para buscar localização por IP (fallback)
+            async function buscarPorIP() {
+                try {
+                    infoEl.innerHTML = '📍 Obtendo localização por IP...';
+                    const resp = await fetch('https://ipapi.co/json/');
+                    const data = await resp.json();
+                    if (data.latitude && data.longitude) {
+                        localizacao = {
+                            latitude: data.latitude,
+                            longitude: data.longitude,
+                            cidade: data.city,
+                            estado: data.region,
+                            pais: data.country_name,
+                            fonte: 'IP'
+                        };
+                        infoEl.innerHTML = `📍 Localização (IP): ${data.city || 'N/A'}, ${data.region || 'N/A'}<br>📌 Coordenadas: ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
+                    } else {
+                        infoEl.innerHTML = '📍 Localização não disponível';
+                    }
+                } catch (e) {
+                    console.error('Erro ao buscar localização por IP:', e);
+                    infoEl.innerHTML = '📍 Localização não disponível';
+                }
+            }
+            
+            // Tentar GPS primeiro
             if (navigator.geolocation) {
+                infoEl.innerHTML = '📍 Obtendo localização GPS...';
                 navigator.geolocation.getCurrentPosition(
                     (pos) => {
                         localizacao = {
                             latitude: pos.coords.latitude,
-                            longitude: pos.coords.longitude
+                            longitude: pos.coords.longitude,
+                            precisao: pos.coords.accuracy,
+                            fonte: 'GPS'
                         };
-                        document.getElementById('info-localizacao').innerHTML = 
-                            `📍 Localização: ${localizacao.latitude.toFixed(6)}, ${localizacao.longitude.toFixed(6)}`;
+                        infoEl.innerHTML = `📍 Localização (GPS): ${localizacao.latitude.toFixed(6)}, ${localizacao.longitude.toFixed(6)}`;
                     },
                     (err) => {
-                        document.getElementById('info-localizacao').innerHTML = 
-                            '📍 Localização não disponível';
+                        console.log('GPS não disponível, tentando IP:', err.message);
+                        buscarPorIP();
                     },
-                    { enableHighAccuracy: true, timeout: 10000 }
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
                 );
+            } else {
+                // Navegador não suporta geolocalização, tentar IP
+                buscarPorIP();
             }
         }
 
@@ -1086,6 +1126,11 @@ PAGINA_ASSINATURA = '''
         async function enviarAssinatura() {
             if (!temAssinatura) {
                 alert('Por favor, desenhe sua assinatura.');
+                return;
+            }
+            
+            if (!selfieBase64) {
+                alert('A selfie é obrigatória! Por favor, tire uma foto sua na Etapa 2.');
                 return;
             }
             
