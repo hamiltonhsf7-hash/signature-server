@@ -2130,47 +2130,109 @@ PAGINA_VERIFICACAO = '''
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             color: #fff;
-            padding: 20px;
+            padding: 10px;
         }
         .container {
             max-width: 700px;
             margin: 0 auto;
             background: rgba(255,255,255,0.05);
             border-radius: 20px;
-            padding: 30px;
+            padding: 20px;
             backdrop-filter: blur(10px);
+            width: 100%;
         }
-        h1 { color: #4fc3f7; margin-bottom: 10px; text-align: center; }
+        h1 { 
+            color: #4fc3f7; 
+            margin-bottom: 10px; 
+            text-align: center; 
+            font-size: clamp(1.3rem, 5vw, 1.8rem);
+        }
         .status-valido {
             background: linear-gradient(135deg, #1b5e20, #2e7d32);
-            padding: 20px;
+            padding: 15px;
             border-radius: 15px;
             text-align: center;
-            margin: 20px 0;
+            margin: 15px 0;
         }
-        .status-valido h2 { color: #81c784; font-size: 28px; }
+        .status-valido h2 { 
+            color: #81c784; 
+            font-size: clamp(1.2rem, 4vw, 1.6rem);
+        }
+        .status-valido p { font-size: 0.9rem; }
         .info-doc {
             background: rgba(0,0,0,0.2);
             border-radius: 10px;
-            padding: 20px;
-            margin: 15px 0;
+            padding: 15px;
+            margin: 12px 0;
         }
-        .info-doc h3 { color: #4fc3f7; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        .info-row { display: flex; margin: 10px 0; }
-        .info-label { color: #aaa; width: 180px; flex-shrink: 0; }
-        .info-valor { color: #fff; }
+        .info-doc h3 { 
+            color: #4fc3f7; 
+            margin-bottom: 12px; 
+            border-bottom: 1px solid #333; 
+            padding-bottom: 8px; 
+            font-size: clamp(0.95rem, 3vw, 1.1rem);
+        }
+        .info-row { 
+            display: flex; 
+            flex-wrap: wrap;
+            margin: 8px 0; 
+            gap: 5px;
+        }
+        .info-label { 
+            color: #aaa; 
+            min-width: 100px;
+            flex-shrink: 0; 
+            font-size: 0.9rem;
+        }
+        .info-valor { 
+            color: #fff; 
+            word-break: break-word;
+            flex: 1;
+            font-size: 0.9rem;
+        }
         .signatario {
             background: rgba(76, 175, 80, 0.1);
             border: 1px solid #4caf50;
             border-radius: 10px;
-            padding: 15px;
+            padding: 12px;
             margin: 10px 0;
         }
         .signatario.pendente {
             background: rgba(255, 152, 0, 0.1);
             border-color: #ff9800;
         }
-        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+        .footer { 
+            text-align: center; 
+            margin-top: 15px; 
+            color: #666; 
+            font-size: 11px; 
+        }
+        
+        /* Responsividade Mobile */
+        @media (max-width: 480px) {
+            body { padding: 8px; }
+            .container { 
+                padding: 15px; 
+                border-radius: 15px;
+            }
+            .info-row { 
+                flex-direction: column; 
+                gap: 2px;
+            }
+            .info-label { 
+                min-width: auto; 
+                font-size: 0.85rem;
+            }
+            .info-valor { 
+                font-size: 0.85rem;
+                padding-left: 5px;
+            }
+            .status-valido { 
+                padding: 12px; 
+                margin: 10px 0;
+            }
+            .signatario { padding: 10px; }
+        }
     </style>
 </head>
 <body>
