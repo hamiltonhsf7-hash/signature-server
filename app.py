@@ -2895,13 +2895,24 @@ def listar_documentos():
         conn = get_db()
         cur = conn.cursor()
         
+        # Query modificada para buscar signatários pelo lote_id quando documento faz parte de um lote
         cur.execute('''
-            SELECT d.doc_id, d.titulo, d.arquivo_nome, d.criado_em, d.criado_por,
-                   COUNT(s.id) as total_signatarios,
-                   SUM(CASE WHEN s.assinado THEN 1 ELSE 0 END) as assinados
+            SELECT d.doc_id, d.titulo, d.arquivo_nome, d.criado_em, d.criado_por, d.lote_id,
+                   COALESCE(
+                       (SELECT COUNT(*) FROM signatarios s WHERE 
+                           CASE WHEN d.lote_id IS NOT NULL 
+                           THEN s.lote_id = d.lote_id 
+                           ELSE s.doc_id = d.doc_id END),
+                       0
+                   ) as total_signatarios,
+                   COALESCE(
+                       (SELECT SUM(CASE WHEN s.assinado THEN 1 ELSE 0 END) FROM signatarios s WHERE 
+                           CASE WHEN d.lote_id IS NOT NULL 
+                           THEN s.lote_id = d.lote_id 
+                           ELSE s.doc_id = d.doc_id END),
+                       0
+                   ) as assinados
             FROM documentos d
-            LEFT JOIN signatarios s ON d.doc_id = s.doc_id
-            GROUP BY d.doc_id, d.titulo, d.arquivo_nome, d.criado_em, d.criado_por
             ORDER BY d.criado_em DESC
         ''')
         
@@ -2918,7 +2929,8 @@ def listar_documentos():
                 'criado_em': row['criado_em'].strftime('%d/%m/%Y %H:%M') if row['criado_em'] else '',
                 'criado_por': row['criado_por'],
                 'total_signatarios': row['total_signatarios'] or 0,
-                'assinados': row['assinados'] or 0
+                'assinados': row['assinados'] or 0,
+                'lote_id': row['lote_id'] or ''
             })
         
         return jsonify({'documentos': documentos})
