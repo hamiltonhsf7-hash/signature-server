@@ -154,7 +154,7 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
                         <p style="margin: 10px 0 0; color: #388e3c;">Status: {assinados}/{total} assinaturas ✅</p>
                     </div>
                     <div style="text-align: center; margin: 25px 0;">
-                        <a href="{server_url}/api/pdf/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
+                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
                         <a href="{server_url}/api/pdf_assinado/{doc_id}" style="display: inline-block; background: #4caf50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">✅ Baixar Assinado</a>
                     </div>
                     <p style="font-size: 14px; color: #666;">O documento também está disponível no módulo de Assinaturas do HAMI ERP.</p>
@@ -178,7 +178,7 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
                         <p style="margin: 10px 0 0; color: #1976d2;">Progresso: {assinados}/{total} assinaturas</p>
                     </div>
                     <div style="text-align: center; margin: 25px 0;">
-                        <a href="{server_url}/api/pdf/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Ver Documento</a>
+                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Ver Documento</a>
                     </div>
                     <p style="font-size: 14px; color: #666;">Acompanhe o status completo no módulo de Assinaturas do HAMI ERP.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
@@ -205,6 +205,98 @@ def notificar_assinatura_async(doc_id, signatario_nome, todos_assinaram=False):
     thread = threading.Thread(target=_enviar, daemon=True)
     thread.start()
     print(f"[EMAIL] Thread de notificação iniciada para doc_id: {doc_id}")
+
+def notificar_signatario_individual(doc_id, signatario_nome, email_signatario, todos_assinaram=False):
+    """Envia email para o próprio signatário com links de download"""
+    print(f"[EMAIL-SIGNATARIO] Iniciando notificação para signatário: {signatario_nome}, email: {email_signatario}")
+    
+    if not email_signatario:
+        print(f"[EMAIL-SIGNATARIO] Email do signatário não informado, ignorando")
+        return False
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar documento
+        cur.execute('''
+            SELECT doc_id, titulo, arquivo_nome
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        doc = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        if not doc:
+            print(f"[EMAIL-SIGNATARIO] Documento não encontrado: {doc_id}")
+            return False
+        
+        print(f"[EMAIL-SIGNATARIO] Documento encontrado: {doc['titulo'] or doc['arquivo_nome']}")
+        
+        # URL base do servidor
+        server_url = "https://signature-server-jq9j.onrender.com"
+        
+        # Montar email
+        if todos_assinaram:
+            assunto = f"✅ Documento CONCLUÍDO: {doc['titulo'] or doc['arquivo_nome']}"
+            corpo = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h1 style="color: #4caf50; text-align: center;">✅ Documento Concluído!</h1>
+                    <p style="font-size: 16px; color: #333;">Olá <strong>{signatario_nome}</strong>,</p>
+                    <p style="font-size: 16px; color: #333;">O documento que você assinou foi <strong>concluído</strong>! Todos os signatários já assinaram.</p>
+                    <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4caf50;">
+                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #2e7d32;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                    </div>
+                    <div style="text-align: center; margin: 25px 0;">
+                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
+                        <a href="{server_url}/api/pdf_assinado/{doc_id}" style="display: inline-block; background: #4caf50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">✅ Baixar Assinado</a>
+                    </div>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                    <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
+                </div>
+            </body>
+            </html>
+            """
+        else:
+            assunto = f"📝 Sua Assinatura foi Registrada: {doc['titulo'] or doc['arquivo_nome']}"
+            corpo = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h1 style="color: #2196f3; text-align: center;">📝 Assinatura Registrada!</h1>
+                    <p style="font-size: 16px; color: #333;">Olá <strong>{signatario_nome}</strong>,</p>
+                    <p style="font-size: 16px; color: #333;">Sua assinatura foi registrada com sucesso no documento:</p>
+                    <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196f3;">
+                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">Você receberá outro e-mail quando todos os signatários tiverem assinado, com os documentos finais.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                    <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
+                </div>
+            </body>
+            </html>
+            """
+        
+        return enviar_email_assinatura(email_signatario, assunto, corpo)
+        
+    except Exception as e:
+        print(f"[EMAIL-SIGNATARIO] Erro ao notificar signatário: {e}")
+        return False
+
+def notificar_signatario_async(doc_id, signatario_nome, email_signatario, todos_assinaram=False):
+    """Wrapper assíncrono para notificar_signatario_individual"""
+    def _enviar():
+        try:
+            notificar_signatario_individual(doc_id, signatario_nome, email_signatario, todos_assinaram)
+        except Exception as e:
+            print(f"[EMAIL-SIGNATARIO] Erro na thread de email: {e}")
+    
+    thread = threading.Thread(target=_enviar, daemon=True)
+    thread.start()
+    print(f"[EMAIL-SIGNATARIO] Thread iniciada para {email_signatario}")
 
 
 def init_db():
@@ -733,6 +825,11 @@ PAGINA_ASSINATURA = '''
                             <label for="input-nascimento">Data de Nascimento</label>
                             <input type="text" id="input-nascimento" placeholder="DD/MM/AAAA" maxlength="10" oninput="formatarData(this)">
                         </div>
+                        <div class="form-group">
+                            <label for="input-email-signatario">📧 Seu e-mail (opcional)</label>
+                            <input type="email" id="input-email-signatario" placeholder="seu@email.com">
+                            <small style="color: #888; font-size: 12px; margin-top: 5px; display: block;">Deixe em branco se não deseja receber cópia dos documentos por e-mail</small>
+                        </div>
                         <div id="erro-validacao" class="erro-validacao"></div>
                         <div id="sucesso-validacao" class="sucesso-validacao"></div>
                         <div class="botoes">
@@ -1160,6 +1257,7 @@ PAGINA_ASSINATURA = '''
                         selfie: selfieBase64,
                         latitude: localizacao?.latitude,
                         longitude: localizacao?.longitude,
+                        email_signatario: document.getElementById('input-email-signatario')?.value?.trim() || null,
                         aceite_termos: true,
                         timestamp_aceite: new Date().toISOString()
                     })
@@ -1399,6 +1497,7 @@ def assinar():
         selfie_base64 = data.get('selfie')
         latitude = data.get('latitude')
         longitude = data.get('longitude')
+        email_signatario = data.get('email_signatario')  # Email opcional para enviar cópia
         aceite_termos = True  # Aceite implícito: ao assinar, usuário aceita os termos
         timestamp_aceite = data.get('timestamp_aceite') or datetime.now(BRT).isoformat()
         
@@ -1507,9 +1606,17 @@ def assinar():
             # Email individual a cada assinatura + email quando todos assinarem
             notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=False)
             
+            # Notificar o próprio signatário se ele informou email
+            if email_signatario:
+                notificar_signatario_async(row['doc_id'], row['nome'], email_signatario, todos_assinaram=False)
+            
             if todos_assinaram:
                 # Enviar email especial quando todos assinaram
                 notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=True)
+                
+                # Também notificar o signatário quando todos assinaram
+                if email_signatario:
+                    notificar_signatario_async(row['doc_id'], row['nome'], email_signatario, todos_assinaram=True)
         except Exception as e:
             print(f"[EMAIL] Erro ao verificar/notificar: {e}")
         
@@ -1868,6 +1975,37 @@ def status_documento(doc_id):
         
     except Exception as e:
         return jsonify({'erro': str(e)})
+
+@app.route('/api/pdf_original/<doc_id>')
+def get_pdf_original(doc_id):
+    """Retorna o PDF original do documento pelo doc_id"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''
+            SELECT arquivo_base64, arquivo_nome
+            FROM documentos WHERE doc_id = %s
+        ''', (doc_id,))
+        
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not row or not row['arquivo_base64']:
+            return 'Documento não encontrado', 404
+        
+        pdf_data = base64.b64decode(row['arquivo_base64'])
+        
+        return Response(
+            pdf_data,
+            mimetype='application/pdf',
+            headers={'Content-Disposition': f'inline; filename="{row["arquivo_nome"]}"'}
+        )
+        
+    except Exception as e:
+        return f'Erro: {str(e)}', 500
+
 
 @app.route('/api/pdf_assinado/<doc_id>')
 def get_pdf_assinado(doc_id):
