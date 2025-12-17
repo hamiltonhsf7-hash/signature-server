@@ -2413,14 +2413,37 @@ def get_pdf_assinado(doc_id):
                 # Se falhar por qualquer motivo (coluna não existe, etc), tenta por doc_id
                 signatarios = []
         
-        # Fallback: se não encontrou pelo lote_id, tenta por doc_id
+        # Fallback: se não encontrou pelo lote_id, tenta pelo doc_id do primeiro documento do lote
         if not signatarios:
-            cur.execute('''
-                SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
-                       data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
-                FROM signatarios WHERE doc_id = %s
-            ''', (doc_id,))
-            signatarios = cur.fetchall()
+            # Para documentos de lote, os signatários estão vinculados ao primeiro doc
+            if lote_id:
+                try:
+                    # Buscar o doc_id do primeiro documento do lote
+                    cur.execute('''
+                        SELECT doc_id FROM documentos 
+                        WHERE lote_id = %s 
+                        ORDER BY criado_em ASC, id ASC 
+                        LIMIT 1
+                    ''', (lote_id,))
+                    primeiro_doc = cur.fetchone()
+                    if primeiro_doc:
+                        cur.execute('''
+                            SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                                   data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
+                            FROM signatarios WHERE doc_id = %s
+                        ''', (primeiro_doc['doc_id'],))
+                        signatarios = cur.fetchall()
+                except:
+                    pass
+            
+            # Se ainda não encontrou, tenta pelo doc_id atual
+            if not signatarios:
+                cur.execute('''
+                    SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                           data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
+                    FROM signatarios WHERE doc_id = %s
+                ''', (doc_id,))
+                signatarios = cur.fetchall()
         
         cur.close()
         conn.close()
@@ -2841,11 +2864,17 @@ def get_pdf_assinado(doc_id):
         writer.write(output)
         output.seek(0)
         
+        # Usar urllib.parse.quote para encoding seguro do nome do arquivo
+        from urllib.parse import quote
+        arquivo_nome = doc['arquivo_nome'] or 'documento.pdf'
+        # Remover caracteres problemáticos e usar encoding UTF-8
+        arquivo_nome_safe = quote(f"ASSINADO_{arquivo_nome}", safe='')
+        
         return Response(
             output.getvalue(),
             mimetype='application/pdf',
             headers={
-                'Content-Disposition': f'inline; filename="ASSINADO_{doc["arquivo_nome"]}"',
+                'Content-Disposition': f"inline; filename*=UTF-8''{arquivo_nome_safe}",
                 'Content-Type': 'application/pdf'
             }
         )
