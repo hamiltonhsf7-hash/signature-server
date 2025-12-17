@@ -2399,22 +2399,35 @@ def get_pdf_assinado(doc_id):
         # Buscar signatários que assinaram
         # Se for um lote, buscar pelo lote_id (signatários são vinculados ao lote, não ao doc individual)
         lote_id = doc.get('lote_id')
+        signatarios = []
+        
         if lote_id:
-            cur.execute('''
-                SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
-                       data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
-                FROM signatarios WHERE lote_id = %s
-            ''', (lote_id,))
-        else:
+            try:
+                cur.execute('''
+                    SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                           data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
+                    FROM signatarios WHERE lote_id = %s
+                ''', (lote_id,))
+                signatarios = cur.fetchall()
+            except Exception as e:
+                # Se falhar por qualquer motivo (coluna não existe, etc), tenta por doc_id
+                signatarios = []
+        
+        # Fallback: se não encontrou pelo lote_id, tenta por doc_id
+        if not signatarios:
             cur.execute('''
                 SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
                        data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
                 FROM signatarios WHERE doc_id = %s
             ''', (doc_id,))
-        signatarios = cur.fetchall()
+            signatarios = cur.fetchall()
         
         cur.close()
         conn.close()
+        
+        # Verificar se encontrou signatários
+        if not signatarios:
+            return jsonify({'erro': 'Nenhum signatário encontrado para este documento'}), 404
         
         # Verificar se todos assinaram
         todos_assinaram = all(s['assinado'] for s in signatarios)
