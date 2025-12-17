@@ -109,7 +109,7 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
         
         # Buscar documento e email do criador
         cur.execute('''
-            SELECT titulo, arquivo_nome, criado_por, email_criador
+            SELECT titulo, arquivo_nome, criado_por, email_criador, lote_id
             FROM documentos WHERE doc_id = %s
         ''', (doc_id,))
         doc = cur.fetchone()
@@ -122,12 +122,26 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
             conn.close()
             return False
         
-        # Buscar total e status dos signatários
-        cur.execute('''
-            SELECT COUNT(*) as total, 
-                   SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
-            FROM signatarios WHERE doc_id = %s
-        ''', (doc_id,))
+        # Se for um lote, buscar todos os documentos do lote
+        lote_id = doc.get('lote_id')
+        docs_lote = []
+        if lote_id:
+            cur.execute('SELECT doc_id, titulo, arquivo_nome FROM documentos WHERE lote_id = %s', (lote_id,))
+            docs_lote = [{'doc_id': r['doc_id'], 'titulo': r['titulo'] or r['arquivo_nome']} for r in cur.fetchall()]
+        
+        # Buscar total e status dos signatários (pelo lote se aplicável)
+        if lote_id:
+            cur.execute('''
+                SELECT COUNT(*) as total, 
+                       SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+                FROM signatarios WHERE lote_id = %s
+            ''', (lote_id,))
+        else:
+            cur.execute('''
+                SELECT COUNT(*) as total, 
+                       SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+                FROM signatarios WHERE doc_id = %s
+            ''', (doc_id,))
         stats = cur.fetchone()
         
         cur.close()
@@ -139,25 +153,45 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
         # URL base do servidor
         server_url = "https://signature-server-jq9j.onrender.com"
         
+        # Gerar lista de documentos para o email
+        if docs_lote:
+            # É um lote - mostrar todos os documentos
+            docs_html = ""
+            for d in docs_lote:
+                docs_html += f"""
+                    <div style="background: #f0f4f8; padding: 10px; border-radius: 6px; margin: 8px 0;">
+                        <strong>📄 {d['titulo']}</strong><br>
+                        <a href="{server_url}/api/pdf_original/{d['doc_id']}" style="color: #1565c0; font-size: 14px;">Original</a> | 
+                        <a href="{server_url}/api/pdf_assinado/{d['doc_id']}" style="color: #2e7d32; font-size: 14px;">Assinado</a>
+                    </div>
+                """
+            titulo_email = f"Lote com {len(docs_lote)} documento(s)"
+        else:
+            # Documento único
+            docs_html = f"""
+                <div style="background: #f0f4f8; padding: 10px; border-radius: 6px; margin: 8px 0;">
+                    <strong>📄 {doc['titulo'] or doc['arquivo_nome']}</strong><br>
+                    <a href="{server_url}/api/pdf_original/{doc_id}" style="color: #1565c0; font-size: 14px;">Original</a> | 
+                    <a href="{server_url}/api/pdf_assinado/{doc_id}" style="color: #2e7d32; font-size: 14px;">Assinado</a>
+                </div>
+            """
+            titulo_email = doc['titulo'] or doc['arquivo_nome']
+        
         # Montar email
         if todos_assinaram:
-            assunto = f"✅ Documento CONCLUÍDO: {doc['titulo'] or doc['arquivo_nome']}"
+            assunto = f"✅ {'Lote' if docs_lote else 'Documento'} CONCLUÍDO: {titulo_email}"
             corpo = f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
                 <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-                    <h1 style="color: #4caf50; text-align: center;">✅ Documento Concluído!</h1>
+                    <h1 style="color: #4caf50; text-align: center;">✅ {'Lote' if docs_lote else 'Documento'} Concluído!</h1>
                     <p style="font-size: 16px; color: #333;">Olá <strong>{doc['criado_por']}</strong>,</p>
-                    <p style="font-size: 16px; color: #333;">Ótima notícia! <strong>Todos os signatários</strong> assinaram o documento:</p>
+                    <p style="font-size: 16px; color: #333;">Ótima notícia! <strong>Todos os signatários</strong> assinaram:</p>
                     <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4caf50;">
-                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #2e7d32;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                        {docs_html}
                         <p style="margin: 10px 0 0; color: #388e3c;">Status: {assinados}/{total} assinaturas ✅</p>
                     </div>
-                    <div style="text-align: center; margin: 25px 0;">
-                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
-                        <a href="{server_url}/api/pdf_assinado/{doc_id}" style="display: inline-block; background: #4caf50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">✅ Baixar Assinado</a>
-                    </div>
-                    <p style="font-size: 14px; color: #666;">O documento também está disponível no módulo de Assinaturas do HAMI ERP.</p>
+                    <p style="font-size: 14px; color: #666;">Os documentos também estão disponíveis no módulo de Assinaturas do HAMI ERP.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
                     <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
                 </div>
@@ -165,20 +199,17 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
             </html>
             """
         else:
-            assunto = f"📝 Nova Assinatura: {doc['titulo'] or doc['arquivo_nome']}"
+            assunto = f"📝 Nova Assinatura: {titulo_email}"
             corpo = f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
                 <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
                     <h1 style="color: #2196f3; text-align: center;">📝 Nova Assinatura Registrada</h1>
                     <p style="font-size: 16px; color: #333;">Olá <strong>{doc['criado_por']}</strong>,</p>
-                    <p style="font-size: 16px; color: #333;">O signatário <strong>{signatario_nome}</strong> assinou o documento:</p>
+                    <p style="font-size: 16px; color: #333;">O signatário <strong>{signatario_nome}</strong> assinou:</p>
                     <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196f3;">
-                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                        {docs_html}
                         <p style="margin: 10px 0 0; color: #1976d2;">Progresso: {assinados}/{total} assinaturas</p>
-                    </div>
-                    <div style="text-align: center; margin: 25px 0;">
-                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Ver Documento</a>
                     </div>
                     <p style="font-size: 14px; color: #666;">Acompanhe o status completo no módulo de Assinaturas do HAMI ERP.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
@@ -218,41 +249,68 @@ def notificar_signatario_individual(doc_id, signatario_nome, email_signatario, t
         conn = get_db()
         cur = conn.cursor()
         
-        # Buscar documento
+        # Buscar documento com lote_id
         cur.execute('''
-            SELECT doc_id, titulo, arquivo_nome
+            SELECT doc_id, titulo, arquivo_nome, lote_id
             FROM documentos WHERE doc_id = %s
         ''', (doc_id,))
         doc = cur.fetchone()
         
+        if not doc:
+            print(f"[EMAIL-SIGNATARIO] Documento não encontrado: {doc_id}")
+            cur.close()
+            conn.close()
+            return False
+        
+        # Se for um lote, buscar todos os documentos do lote
+        lote_id = doc.get('lote_id')
+        docs_lote = []
+        if lote_id:
+            cur.execute('SELECT doc_id, titulo, arquivo_nome FROM documentos WHERE lote_id = %s', (lote_id,))
+            docs_lote = [{'doc_id': r['doc_id'], 'titulo': r['titulo'] or r['arquivo_nome']} for r in cur.fetchall()]
+        
         cur.close()
         conn.close()
         
-        if not doc:
-            print(f"[EMAIL-SIGNATARIO] Documento não encontrado: {doc_id}")
-            return False
-        
-        print(f"[EMAIL-SIGNATARIO] Documento encontrado: {doc['titulo'] or doc['arquivo_nome']}")
+        print(f"[EMAIL-SIGNATARIO] Documento encontrado: {doc['titulo'] or doc['arquivo_nome']}, Lote: {len(docs_lote)} docs")
         
         # URL base do servidor
         server_url = "https://signature-server-jq9j.onrender.com"
         
+        # Gerar lista de documentos para o email
+        if docs_lote:
+            docs_html = ""
+            for d in docs_lote:
+                docs_html += f"""
+                    <div style="background: #f0f4f8; padding: 10px; border-radius: 6px; margin: 8px 0;">
+                        <strong>📄 {d['titulo']}</strong><br>
+                        <a href="{server_url}/api/pdf_original/{d['doc_id']}" style="color: #1565c0; font-size: 14px;">Original</a> | 
+                        <a href="{server_url}/api/pdf_assinado/{d['doc_id']}" style="color: #2e7d32; font-size: 14px;">Assinado</a>
+                    </div>
+                """
+            titulo_email = f"Lote com {len(docs_lote)} documento(s)"
+        else:
+            docs_html = f"""
+                <div style="background: #f0f4f8; padding: 10px; border-radius: 6px; margin: 8px 0;">
+                    <strong>📄 {doc['titulo'] or doc['arquivo_nome']}</strong><br>
+                    <a href="{server_url}/api/pdf_original/{doc_id}" style="color: #1565c0; font-size: 14px;">Original</a> | 
+                    <a href="{server_url}/api/pdf_assinado/{doc_id}" style="color: #2e7d32; font-size: 14px;">Assinado</a>
+                </div>
+            """
+            titulo_email = doc['titulo'] or doc['arquivo_nome']
+        
         # Montar email
         if todos_assinaram:
-            assunto = f"✅ Documento CONCLUÍDO: {doc['titulo'] or doc['arquivo_nome']}"
+            assunto = f"✅ {'Lote' if docs_lote else 'Documento'} CONCLUÍDO: {titulo_email}"
             corpo = f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
                 <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-                    <h1 style="color: #4caf50; text-align: center;">✅ Documento Concluído!</h1>
+                    <h1 style="color: #4caf50; text-align: center;">✅ {'Lote' if docs_lote else 'Documento'} Concluído!</h1>
                     <p style="font-size: 16px; color: #333;">Olá <strong>{signatario_nome}</strong>,</p>
-                    <p style="font-size: 16px; color: #333;">O documento que você assinou foi <strong>concluído</strong>! Todos os signatários já assinaram.</p>
+                    <p style="font-size: 16px; color: #333;">{'Os documentos que você assinou foram' if docs_lote else 'O documento que você assinou foi'} <strong>concluído{'s' if docs_lote else ''}</strong>! Todos os signatários já assinaram.</p>
                     <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4caf50;">
-                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #2e7d32;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
-                    </div>
-                    <div style="text-align: center; margin: 25px 0;">
-                        <a href="{server_url}/api/pdf_original/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
-                        <a href="{server_url}/api/pdf_assinado/{doc_id}" style="display: inline-block; background: #4caf50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">✅ Baixar Assinado</a>
+                        {docs_html}
                     </div>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
                     <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
@@ -261,16 +319,16 @@ def notificar_signatario_individual(doc_id, signatario_nome, email_signatario, t
             </html>
             """
         else:
-            assunto = f"📝 Sua Assinatura foi Registrada: {doc['titulo'] or doc['arquivo_nome']}"
+            assunto = f"📝 Sua Assinatura foi Registrada: {titulo_email}"
             corpo = f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px;">
                 <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
                     <h1 style="color: #2196f3; text-align: center;">📝 Assinatura Registrada!</h1>
                     <p style="font-size: 16px; color: #333;">Olá <strong>{signatario_nome}</strong>,</p>
-                    <p style="font-size: 16px; color: #333;">Sua assinatura foi registrada com sucesso no documento:</p>
+                    <p style="font-size: 16px; color: #333;">Sua assinatura foi registrada com sucesso {'nos documentos' if docs_lote else 'no documento'}:</p>
                     <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196f3;">
-                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
+                        {docs_html}
                     </div>
                     <p style="font-size: 14px; color: #666;">Você receberá outro e-mail quando todos os signatários tiverem assinado, com os documentos finais.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
@@ -1323,15 +1381,15 @@ PAGINA_ASSINATURA = '''
                     if (data.lote && data.documentos && data.documentos.length > 1) {
                         // Lote: mostrar links para todos os documentos
                         let linksHtml = '';
-                        data.documentos.forEach((doc_id, idx) => {
+                        data.documentos.forEach((doc, idx) => {
                             linksHtml += `
                                 <div style="margin-bottom: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 10px;">
-                                    <strong style="color: #4fc3f7;">Documento ${idx + 1}</strong>
+                                    <strong style="color: #4fc3f7;">${doc.titulo || 'Documento ' + (idx + 1)}</strong>
                                     <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
-                                        <a href="/api/pdf_original/${doc_id}" target="_blank" class="btn btn-primario" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
+                                        <a href="/api/pdf_original/${doc.doc_id}" target="_blank" class="btn btn-primario" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
                                             📄 Original
                                         </a>
-                                        <a href="/api/pdf_assinado/${doc_id}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
+                                        <a href="/api/pdf_assinado/${doc.doc_id}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
                                             ✅ Assinado
                                         </a>
                                     </div>
@@ -1651,10 +1709,10 @@ def assinar():
         lote_id = row.get('lote_id')
         docs_do_lote = []
         
-        # Se for um lote, buscar todos os documentos do lote
+        # Se for um lote, buscar todos os documentos do lote COM TÍTULOS
         if lote_id:
-            cur.execute('SELECT doc_id FROM documentos WHERE lote_id = %s', (lote_id,))
-            docs_do_lote = [r['doc_id'] for r in cur.fetchall()]
+            cur.execute('SELECT doc_id, titulo, arquivo_nome FROM documentos WHERE lote_id = %s', (lote_id,))
+            docs_do_lote = [{'doc_id': r['doc_id'], 'titulo': r['titulo'] or r['arquivo_nome']} for r in cur.fetchall()]
         
         # Obter IP real (considerando proxies como Render, Cloudflare, etc.)
         ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
@@ -1705,7 +1763,8 @@ def assinar():
         conn.close()
         
         # Registrar no log de auditoria (para todos os docs do lote se aplicável)
-        docs_para_auditoria = docs_do_lote if docs_do_lote else [row['doc_id']]
+        # docs_do_lote agora é lista de {doc_id, titulo}, precisa extrair doc_id
+        docs_para_auditoria = [d['doc_id'] for d in docs_do_lote] if docs_do_lote else [row['doc_id']]
         for doc_id in docs_para_auditoria:
             registrar_auditoria(
                 doc_id=doc_id,
