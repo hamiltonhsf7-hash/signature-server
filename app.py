@@ -393,6 +393,13 @@ def init_db():
     except:
         pass
     
+    # Adicionar suporte a lotes (múltiplos documentos por assinatura)
+    try:
+        cur.execute('ALTER TABLE documentos ADD COLUMN IF NOT EXISTS lote_id VARCHAR(32)')
+        cur.execute('ALTER TABLE signatarios ADD COLUMN IF NOT EXISTS lote_id VARCHAR(32)')
+    except:
+        pass
+    
     conn.commit()
     cur.close()
     conn.close()
@@ -785,33 +792,78 @@ PAGINA_ASSINATURA = '''
                 }
                 
                 if (data.ja_assinado) {
+                    // Verificar se é lote
+                    let downloadLinks = '';
+                    if (data.lote && data.documentos) {
+                        downloadLinks = data.documentos.map((doc, i) => `
+                            <div style="margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                                <strong>${i + 1}. ${doc.titulo}</strong><br>
+                                <a href="/api/pdf_original/${doc.doc_id}" target="_blank" style="color: #4fc3f7;">📄 Original</a> |
+                                <a href="/api/pdf_assinado/${doc.doc_id}" target="_blank" style="color: #4caf50;">✅ Assinado</a>
+                            </div>
+                        `).join('');
+                    } else {
+                        downloadLinks = `
+                            <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                📄 Baixar Documento Original
+                            </a>
+                            <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                ✅ Baixar Documento Assinado
+                            </a>
+                        `;
+                    }
+                    
                     document.getElementById('conteudo').innerHTML = `
                         <div class="sucesso">
-                            <h2>✅ Documento Já Assinado</h2>
-                            <p>Este documento foi assinado em ${data.data_assinatura}</p>
+                            <h2>✅ ${data.lote ? 'Documentos Já Assinados' : 'Documento Já Assinado'}</h2>
+                            <p>${data.lote ? 'Estes documentos foram assinados' : 'Este documento foi assinado'} em ${data.data_assinatura}</p>
                             <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
-                                <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
-                                    📄 Baixar Documento Original
-                                </a>
-                                <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
-                                    ✅ Baixar Documento Assinado
-                                </a>
+                                ${downloadLinks}
                             </div>
                         </div>
                     `;
                     return;
                 }
                 
-                document.getElementById('conteudo').innerHTML = `
-                    <div class="info">
-                        <p><strong>📄 Documento:</strong> ${data.titulo || data.arquivo_nome}</p>
-                        <p><strong>👤 Signatário:</strong> ${data.signatario_nome}</p>
-                        <p><strong>📧 Email:</strong> ${data.signatario_email || 'Não informado'}</p>
-                    </div>
+                // Verificar se é lote para exibir múltiplos PDFs
+                let infoHtml = '';
+                let pdfFrames = '';
+                
+                if (data.lote && data.documentos) {
+                    infoHtml = `
+                        <div class="info">
+                            <p><strong>📦 Lote com ${data.total_documentos} documento(s):</strong></p>
+                            ${data.documentos.map((doc, i) => `<p style="margin-left: 10px;">• ${doc.titulo}</p>`).join('')}
+                            <p><strong>👤 Signatário:</strong> ${data.signatario_nome}</p>
+                            <p><strong>📧 Email:</strong> ${data.signatario_email || 'Não informado'}</p>
+                        </div>
+                    `;
                     
-                    <div class="documento-frame">
-                        <iframe src="/api/pdf/${token}" title="Documento PDF"></iframe>
-                    </div>
+                    pdfFrames = data.documentos.map((doc, i) => `
+                        <div class="documento-frame">
+                            <h4 style="color: #4fc3f7; margin-bottom: 10px;">${i + 1}. ${doc.titulo}</h4>
+                            <iframe src="/api/pdf_original/${doc.doc_id}" title="${doc.titulo}"></iframe>
+                        </div>
+                    `).join('');
+                } else {
+                    infoHtml = `
+                        <div class="info">
+                            <p><strong>📄 Documento:</strong> ${data.titulo || data.arquivo_nome}</p>
+                            <p><strong>👤 Signatário:</strong> ${data.signatario_nome}</p>
+                            <p><strong>📧 Email:</strong> ${data.signatario_email || 'Não informado'}</p>
+                        </div>
+                    `;
+                    pdfFrames = `
+                        <div class="documento-frame">
+                            <iframe src="/api/pdf/${token}" title="Documento PDF"></iframe>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('conteudo').innerHTML = `
+                    ${infoHtml}
+                    
+                    ${pdfFrames}
                     
                     <!-- ETAPA 0: Validação de Identidade -->
                     <div class="etapa" id="etapa-validacao">
@@ -1266,21 +1318,58 @@ PAGINA_ASSINATURA = '''
                 const data = await resp.json();
                 
                 if (data.sucesso) {
-                    document.getElementById('conteudo').innerHTML = `
-                        <div class="sucesso">
-                            <h2>✅ Documento Assinado com Sucesso!</h2>
-                            <p>Sua assinatura foi registrada em ${new Date().toLocaleString('pt-BR')}</p>
-                            <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
-                                <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
-                                    📄 Baixar Documento Original
-                                </a>
-                                <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
-                                    ✅ Baixar Documento Assinado
-                                </a>
+                    let htmlSucesso = '';
+                    
+                    if (data.lote && data.documentos && data.documentos.length > 1) {
+                        // Lote: mostrar links para todos os documentos
+                        let linksHtml = '';
+                        data.documentos.forEach((doc_id, idx) => {
+                            linksHtml += `
+                                <div style="margin-bottom: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 10px;">
+                                    <strong style="color: #4fc3f7;">Documento ${idx + 1}</strong>
+                                    <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                                        <a href="/api/pdf_original/${doc_id}" target="_blank" class="btn btn-primario" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
+                                            📄 Original
+                                        </a>
+                                        <a href="/api/pdf_assinado/${doc_id}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; padding: 8px 16px; font-size: 14px;">
+                                            ✅ Assinado
+                                        </a>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        htmlSucesso = `
+                            <div class="sucesso">
+                                <h2>✅ Lote Assinado com Sucesso!</h2>
+                                <p>Sua assinatura foi registrada em ${new Date().toLocaleString('pt-BR')}</p>
+                                <p style="color: #4fc3f7; margin-top: 10px;">📦 ${data.documentos.length} documentos assinados</p>
+                                <div style="margin-top: 20px;">
+                                    ${linksHtml}
+                                </div>
+                                <p style="margin-top: 20px; color: #aaa; font-size: 14px;">Você pode fechar esta página ou baixar os documentos acima.</p>
                             </div>
-                            <p style="margin-top: 20px; color: #aaa; font-size: 14px;">Você pode fechar esta página ou baixar os documentos acima.</p>
-                        </div>
-                    `;
+                        `;
+                    } else {
+                        // Documento único
+                        htmlSucesso = `
+                            <div class="sucesso">
+                                <h2>✅ Documento Assinado com Sucesso!</h2>
+                                <p>Sua assinatura foi registrada em ${new Date().toLocaleString('pt-BR')}</p>
+                                <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
+                                    <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                        📄 Baixar Documento Original
+                                    </a>
+                                    <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                        ✅ Baixar Documento Assinado
+                                    </a>
+                                </div>
+                                <p style="margin-top: 20px; color: #aaa; font-size: 14px;">Você pode fechar esta página ou baixar os documentos acima.</p>
+                            </div>
+                        `;
+                    }
+                    
+                    document.getElementById('conteudo').innerHTML = htmlSucesso;
                 } else {
                     alert('Erro ao assinar: ' + (data.erro || 'Erro desconhecido'));
                     btn.disabled = false;
@@ -1359,25 +1448,63 @@ def pagina_assinatura(token):
 
 @app.route('/api/documento/<token>')
 def get_documento(token):
-    """Retorna informações do documento"""
+    """Retorna informações do documento (ou lote de documentos)"""
     try:
         conn = get_db()
         cur = conn.cursor()
         
+        # Buscar signatário pelo token
         cur.execute('''
-            SELECT d.titulo, d.arquivo_nome, s.nome as signatario_nome, 
-                   s.email as signatario_email, s.assinado, s.data_assinatura
+            SELECT s.*, d.titulo, d.arquivo_nome, d.doc_id
             FROM signatarios s
             JOIN documentos d ON s.doc_id = d.doc_id
             WHERE s.token = %s
         ''', (token,))
         
         row = cur.fetchone()
-        cur.close()
-        conn.close()
         
         if not row:
+            cur.close()
+            conn.close()
             return jsonify({'erro': 'Token inválido ou documento não encontrado'})
+        
+        # Verificar se é um lote
+        lote_id = row.get('lote_id')
+        
+        if lote_id:
+            # É um lote - buscar todos os documentos do lote
+            cur.execute('''
+                SELECT doc_id, titulo, arquivo_nome
+                FROM documentos WHERE lote_id = %s
+                ORDER BY id
+            ''', (lote_id,))
+            docs_lote = cur.fetchall()
+            
+            cur.close()
+            conn.close()
+            
+            if row['assinado']:
+                return jsonify({
+                    'ja_assinado': True,
+                    'data_assinatura': row['data_assinatura'].strftime('%d/%m/%Y às %H:%M') if row['data_assinatura'] else '',
+                    'lote': True,
+                    'lote_id': lote_id,
+                    'documentos': [{'doc_id': d['doc_id'], 'titulo': d['titulo'] or d['arquivo_nome'], 'arquivo_nome': d['arquivo_nome']} for d in docs_lote]
+                })
+            
+            return jsonify({
+                'lote': True,
+                'lote_id': lote_id,
+                'total_documentos': len(docs_lote),
+                'documentos': [{'doc_id': d['doc_id'], 'titulo': d['titulo'] or d['arquivo_nome'], 'arquivo_nome': d['arquivo_nome']} for d in docs_lote],
+                'signatario_nome': row['nome'],
+                'signatario_email': row['email'],
+                'ja_assinado': False
+            })
+        
+        # Documento único (comportamento original)
+        cur.close()
+        conn.close()
         
         if row['assinado']:
             return jsonify({
@@ -1388,8 +1515,8 @@ def get_documento(token):
         return jsonify({
             'titulo': row['titulo'],
             'arquivo_nome': row['arquivo_nome'],
-            'signatario_nome': row['signatario_nome'],
-            'signatario_email': row['signatario_email'],
+            'signatario_nome': row['nome'],
+            'signatario_email': row['email'],
             'ja_assinado': False
         })
         
@@ -1507,7 +1634,8 @@ def assinar():
         conn = get_db()
         cur = conn.cursor()
         
-        cur.execute('SELECT s.*, d.doc_id FROM signatarios s JOIN documentos d ON s.doc_id = d.doc_id WHERE s.token = %s', (token,))
+        # Buscar signatário e verificar se é um lote
+        cur.execute('SELECT s.*, d.doc_id, s.lote_id FROM signatarios s JOIN documentos d ON s.doc_id = d.doc_id WHERE s.token = %s', (token,))
         row = cur.fetchone()
         
         if not row:
@@ -1519,6 +1647,14 @@ def assinar():
             cur.close()
             conn.close()
             return jsonify({'erro': 'Documento já foi assinado'})
+        
+        lote_id = row.get('lote_id')
+        docs_do_lote = []
+        
+        # Se for um lote, buscar todos os documentos do lote
+        if lote_id:
+            cur.execute('SELECT doc_id FROM documentos WHERE lote_id = %s', (lote_id,))
+            docs_do_lote = [r['doc_id'] for r in cur.fetchall()]
         
         # Obter IP real (considerando proxies como Render, Cloudflare, etc.)
         ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
@@ -1568,34 +1704,47 @@ def assinar():
         cur.close()
         conn.close()
         
-        # Registrar no log de auditoria
-        registrar_auditoria(
-            doc_id=row['doc_id'],
-            acao='ASSINATURA_CONCLUIDA',
-            usuario=row['nome'],
-            ip=ip_real,
-            user_agent=user_agent,
-            dados_adicionais={
-                'signatario_id': row['id'],
-                'cpf_mascarado': row['cpf'][:3] + '.***.***-' + row['cpf'][-2:] if row['cpf'] else None,
-                'latitude': float(latitude) if latitude else None,
-                'longitude': float(longitude) if longitude else None,
-                'aceite_termos': aceite_termos,
-                'hash_aceite': hash_aceite,
-                'timestamp_utc': timestamp_utc.isoformat(),
-                'timestamp_brasil': timestamp_brasil.isoformat()
-            }
-        )
+        # Registrar no log de auditoria (para todos os docs do lote se aplicável)
+        docs_para_auditoria = docs_do_lote if docs_do_lote else [row['doc_id']]
+        for doc_id in docs_para_auditoria:
+            registrar_auditoria(
+                doc_id=doc_id,
+                acao='ASSINATURA_CONCLUIDA',
+                usuario=row['nome'],
+                ip=ip_real,
+                user_agent=user_agent,
+                dados_adicionais={
+                    'signatario_id': row['id'],
+                    'cpf_mascarado': row['cpf'][:3] + '.***.***-' + row['cpf'][-2:] if row['cpf'] else None,
+                    'latitude': float(latitude) if latitude else None,
+                    'longitude': float(longitude) if longitude else None,
+                    'aceite_termos': aceite_termos,
+                    'hash_aceite': hash_aceite,
+                    'timestamp_utc': timestamp_utc.isoformat(),
+                    'timestamp_brasil': timestamp_brasil.isoformat(),
+                    'lote_id': lote_id
+                }
+            )
         
-        # Verificar se todos os signatários assinaram
+        # Verificar se todos os signatários assinaram (considerando lotes)
         try:
             conn2 = get_db()
             cur2 = conn2.cursor()
-            cur2.execute('''
-                SELECT COUNT(*) as total, 
-                       SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
-                FROM signatarios WHERE doc_id = %s
-            ''', (row['doc_id'],))
+            
+            # Para lotes, verificar com base no lote_id
+            if lote_id:
+                cur2.execute('''
+                    SELECT COUNT(*) as total, 
+                           SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+                    FROM signatarios WHERE lote_id = %s
+                ''', (lote_id,))
+            else:
+                cur2.execute('''
+                    SELECT COUNT(*) as total, 
+                           SUM(CASE WHEN assinado THEN 1 ELSE 0 END) as assinados
+                    FROM signatarios WHERE doc_id = %s
+                ''', (row['doc_id'],))
+            
             stats = cur2.fetchone()
             cur2.close()
             conn2.close()
@@ -1632,6 +1781,15 @@ def assinar():
             print(f"[EMAIL] Thread de emails iniciada para doc_id: {row['doc_id']}")
         except Exception as e:
             print(f"[EMAIL] Erro ao verificar/notificar: {e}")
+        
+        # Retornar informações do lote se aplicável
+        if lote_id:
+            return jsonify({
+                'sucesso': True,
+                'lote': True,
+                'lote_id': lote_id,
+                'documentos': docs_do_lote
+            })
         
         return jsonify({'sucesso': True})
         
@@ -1881,6 +2039,130 @@ def criar_documento():
         
     except Exception as e:
         return jsonify({'erro': str(e)})
+
+@app.route('/api/criar_lote', methods=['POST'])
+def criar_lote():
+    """Cria um lote de documentos para assinatura única (múltiplos PDFs, uma assinatura)"""
+    try:
+        data = request.json
+        
+        documentos = data.get('documentos', [])  # Lista de {titulo, arquivo_nome, arquivo_base64}
+        signatarios = data.get('signatarios', [])
+        criado_por = data.get('criado_por', 'sistema')
+        email_criador = data.get('email_criador', '')
+        pasta_id = data.get('pasta_id', 1)
+        
+        if not documentos or not signatarios:
+            return jsonify({'erro': 'Dados incompletos: documentos e signatarios são obrigatórios'})
+        
+        if len(documentos) < 1:
+            return jsonify({'erro': 'Pelo menos um documento é necessário'})
+        
+        # Gerar ID do lote
+        lote_id = hashlib.sha256(f"{datetime.now().isoformat()}{len(documentos)}".encode()).hexdigest()[:16]
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        doc_ids = []
+        
+        # Criar cada documento do lote
+        for doc_data in documentos:
+            arquivo_base64 = doc_data.get('arquivo_base64', '')
+            arquivo_nome = doc_data.get('arquivo_nome', '')
+            titulo = doc_data.get('titulo', arquivo_nome)
+            
+            if not arquivo_base64:
+                continue
+            
+            # Gerar hash do documento
+            arquivo_bytes = base64.b64decode(arquivo_base64)
+            arquivo_hash = hashlib.sha256(arquivo_bytes).hexdigest()
+            
+            # Gerar ID do documento
+            doc_id = hashlib.sha256(f"{datetime.now().isoformat()}{arquivo_nome}{lote_id}".encode()).hexdigest()[:16]
+            
+            # Inserir documento com lote_id
+            cur.execute('''
+                INSERT INTO documentos (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id, email_criador, lote_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_por, pasta_id, email_criador, lote_id))
+            
+            doc_ids.append({
+                'doc_id': doc_id,
+                'titulo': titulo,
+                'arquivo_nome': arquivo_nome,
+                'hash': arquivo_hash
+            })
+        
+        # Inserir signatários vinculados ao lote (não ao documento individual)
+        # O token é do lote, não do documento
+        links = []
+        for sig in signatarios:
+            token = hashlib.sha256(f"{lote_id}{sig['nome']}{datetime.now().isoformat()}".encode()).hexdigest()[:32]
+            
+            # Tratar data_nascimento
+            data_nasc = sig.get('data_nascimento', '')
+            if data_nasc and data_nasc.strip():
+                try:
+                    if '/' in data_nasc:
+                        partes = data_nasc.strip().split('/')
+                        if len(partes) == 3:
+                            data_nasc = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                except:
+                    data_nasc = None
+            else:
+                data_nasc = None
+            
+            # Inserir signatário com lote_id (doc_id fica como referência ao primeiro doc)
+            cur.execute('''
+                INSERT INTO signatarios (doc_id, nome, email, cpf, telefone, token, data_nascimento, lote_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (doc_ids[0]['doc_id'] if doc_ids else '', sig.get('nome', ''), sig.get('email', ''), sig.get('cpf', ''), sig.get('telefone', ''), token, data_nasc, lote_id))
+            
+            base_url = request.host_url.rstrip('/')
+            link = f"{base_url}/assinar/{token}"
+            
+            links.append({
+                'nome': sig.get('nome', ''),
+                'email': sig.get('email', ''),
+                'link': link,
+                'token': token
+            })
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Registrar auditoria
+        ip_real = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+        if ip_real and ',' in ip_real:
+            ip_real = ip_real.split(',')[0].strip()
+        
+        registrar_auditoria(
+            doc_id=lote_id,
+            acao='LOTE_CRIADO',
+            usuario=criado_por,
+            ip=ip_real,
+            user_agent=request.headers.get('User-Agent', ''),
+            dados_adicionais={
+                'total_documentos': len(doc_ids),
+                'documentos': [d['arquivo_nome'] for d in doc_ids],
+                'total_signatarios': len(signatarios),
+                'pasta_id': pasta_id
+            }
+        )
+        
+        return jsonify({
+            'sucesso': True,
+            'lote_id': lote_id,
+            'documentos': doc_ids,
+            'links': links
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
 
 @app.route('/api/dossie/<doc_id>')
 def get_dossie(doc_id):
