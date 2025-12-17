@@ -2292,10 +2292,18 @@ def get_pdf_original(doc_id):
         
         pdf_data = base64.b64decode(row['arquivo_base64'])
         
+        # Usar urllib.parse.quote para encoding seguro do nome do arquivo
+        from urllib.parse import quote
+        arquivo_nome = row['arquivo_nome'] or 'documento.pdf'
+        # Remover caracteres problemáticos e usar encoding UTF-8
+        arquivo_nome_safe = quote(arquivo_nome, safe='')
+        
         return Response(
             pdf_data,
             mimetype='application/pdf',
-            headers={'Content-Disposition': f'inline; filename="{row["arquivo_nome"]}"'}
+            headers={
+                'Content-Disposition': f"inline; filename*=UTF-8''{arquivo_nome_safe}"
+            }
         )
         
     except Exception as e:
