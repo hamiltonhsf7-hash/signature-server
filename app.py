@@ -2485,12 +2485,28 @@ def get_pdf_assinado(doc_id):
         c.setFont("Helvetica-Bold", 18)
         c.drawString(50, height - 50, "FOLHA DE ASSINATURAS DIGITAIS")
         
+        # Função para normalizar caracteres especiais para ASCII (ReportLab/Helvetica não suporta bem UTF-8)
+        import unicodedata
+        def normalizar_texto(texto):
+            """Remove acentos e normaliza caracteres especiais para ASCII"""
+            if not texto:
+                return ''
+            # Normaliza para NFD (decompõe caracteres acentuados)
+            texto_normalizado = unicodedata.normalize('NFD', texto)
+            # Remove os caracteres de combinação (acentos)
+            texto_ascii = ''.join(char for char in texto_normalizado if unicodedata.category(char) != 'Mn')
+            # Limpa caracteres não-ASCII restantes
+            texto_limpo = texto_ascii.encode('ascii', 'replace').decode('ascii')
+            return texto_limpo
+        
         # Informações do documento
         c.setFillColor(cor_label)
         c.setFont("Helvetica", 10)
         c.drawString(50, height - 75, "Documento:")
         c.setFillColor(cor_valor)
-        c.drawString(120, height - 75, f"{doc['titulo'] or doc['arquivo_nome']}")
+        # Normalizar nome do documento para evitar caracteres estranhos
+        nome_documento = normalizar_texto(doc['titulo'] or doc['arquivo_nome'])
+        c.drawString(120, height - 75, nome_documento)
         
         c.setFillColor(cor_label)
         c.drawString(50, height - 90, "Hash SHA-256:")
@@ -2811,10 +2827,18 @@ def get_pdf_assinado(doc_id):
                     c.setFont("Helvetica-Bold", 9)
                     c.drawString(text_x, qr_y + 60, "Escaneie o QR Code ou acesse o link:")
                     
-                    # Link clicável (URL completa)
+                    # Link clicável (URL completa) - quebrar em múltiplas linhas se necessário
                     c.setFillColor(HexColor('#1565c0'))
-                    c.setFont("Helvetica", 8)
-                    c.drawString(text_x, qr_y + 45, verificacao_url)
+                    c.setFont("Helvetica", 7)
+                    # Quebrar URL longa em múltiplas linhas
+                    max_chars = 55
+                    if len(verificacao_url) > max_chars:
+                        # Primeira linha
+                        c.drawString(text_x, qr_y + 47, verificacao_url[:max_chars])
+                        # Segunda linha
+                        c.drawString(text_x, qr_y + 38, verificacao_url[max_chars:])
+                    else:
+                        c.drawString(text_x, qr_y + 45, verificacao_url)
                     
                     # Instruções
                     c.setFillColor(HexColor('#666666'))
