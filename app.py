@@ -2384,9 +2384,9 @@ def get_pdf_assinado(doc_id):
         conn = get_db()
         cur = conn.cursor()
         
-        # Buscar documento
+        # Buscar documento COM lote_id
         cur.execute('''
-            SELECT doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_em
+            SELECT doc_id, titulo, arquivo_nome, arquivo_base64, arquivo_hash, criado_em, lote_id
             FROM documentos WHERE doc_id = %s
         ''', (doc_id,))
         doc = cur.fetchone()
@@ -2396,12 +2396,21 @@ def get_pdf_assinado(doc_id):
             conn.close()
             return jsonify({'erro': 'Documento não encontrado'}), 404
         
-        # Buscar signatários que assinaram (incluindo todos os campos)
-        cur.execute('''
-            SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
-                   data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
-            FROM signatarios WHERE doc_id = %s
-        ''', (doc_id,))
+        # Buscar signatários que assinaram
+        # Se for um lote, buscar pelo lote_id (signatários são vinculados ao lote, não ao doc individual)
+        lote_id = doc.get('lote_id')
+        if lote_id:
+            cur.execute('''
+                SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                       data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
+                FROM signatarios WHERE lote_id = %s
+            ''', (lote_id,))
+        else:
+            cur.execute('''
+                SELECT nome, email, cpf, telefone, token, assinado, assinatura_base64, selfie_base64,
+                       data_assinatura, ip_assinatura, user_agent, latitude, longitude, endereco_aproximado
+                FROM signatarios WHERE doc_id = %s
+            ''', (doc_id,))
         signatarios = cur.fetchall()
         
         cur.close()
