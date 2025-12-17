@@ -136,6 +136,9 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
         total = stats['total']
         assinados = stats['assinados']
         
+        # URL base do servidor
+        server_url = "https://signature-server-jq9j.onrender.com"
+        
         # Montar email
         if todos_assinaram:
             assunto = f"✅ Documento CONCLUÍDO: {doc['titulo'] or doc['arquivo_nome']}"
@@ -150,7 +153,11 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
                         <p style="margin: 0; font-size: 18px; font-weight: bold; color: #2e7d32;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
                         <p style="margin: 10px 0 0; color: #388e3c;">Status: {assinados}/{total} assinaturas ✅</p>
                     </div>
-                    <p style="font-size: 14px; color: #666;">O documento assinado está disponível no módulo de Assinaturas do HAMI ERP.</p>
+                    <div style="text-align: center; margin: 25px 0;">
+                        <a href="{server_url}/api/pdf/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Baixar Original</a>
+                        <a href="{server_url}/api/pdf_assinado/{doc_id}" style="display: inline-block; background: #4caf50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">✅ Baixar Assinado</a>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">O documento também está disponível no módulo de Assinaturas do HAMI ERP.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
                     <p style="font-size: 12px; color: #999; text-align: center;">HAMI ERP - Sistema de Gestão Empresarial</p>
                 </div>
@@ -169,6 +176,9 @@ def notificar_assinatura_individual(doc_id, signatario_nome, todos_assinaram=Fal
                     <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196f3;">
                         <p style="margin: 0; font-size: 18px; font-weight: bold; color: #1565c0;">📄 {doc['titulo'] or doc['arquivo_nome']}</p>
                         <p style="margin: 10px 0 0; color: #1976d2;">Progresso: {assinados}/{total} assinaturas</p>
+                    </div>
+                    <div style="text-align: center; margin: 25px 0;">
+                        <a href="{server_url}/api/pdf/{doc_id}" style="display: inline-block; background: #2196f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; margin: 5px; font-weight: bold;">📄 Ver Documento</a>
                     </div>
                     <p style="font-size: 14px; color: #666;">Acompanhe o status completo no módulo de Assinaturas do HAMI ERP.</p>
                     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
