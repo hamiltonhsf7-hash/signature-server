@@ -1535,7 +1535,11 @@ def limpar_tudo():
         cur = conn.cursor()
         
         # Limpar na ordem correta (foreign keys)
-        cur.execute("DELETE FROM auditoria")
+        # Tentar limpar log_auditoria (pode não existir em servidores antigos)
+        try:
+            cur.execute("DELETE FROM log_auditoria")
+        except:
+            pass  # Tabela pode não existir
         cur.execute("DELETE FROM signatarios")
         cur.execute("DELETE FROM documentos")
         cur.execute("DELETE FROM pastas WHERE id > 1")  # Manter pasta raiz
