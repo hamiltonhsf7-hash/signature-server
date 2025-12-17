@@ -2653,9 +2653,10 @@ def get_pdf_assinado(doc_id):
                         c.drawString(assinatura_x, img_y + 50, "Assinatura não disponível")
                 
                 # ========== QR CODE DE VERIFICAÇÃO ==========
-                # Gerar QR Code com link de verificação
+                # Gerar QR Code com link de verificação (usa hash para verificação permanente)
                 server_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://signature-server-jq9j.onrender.com')
-                verificacao_url = f"{server_url}/verificar/{doc_id}"
+                # Usar hash do documento para verificação permanente (funciona mesmo após exclusão do PDF)
+                verificacao_url = f"{server_url}/verificar/{doc['arquivo_hash']}"
                 
                 try:
                     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=4, border=2)
@@ -3294,6 +3295,357 @@ def limpar_documentos():
             'sucesso': True,
             'documentos_removidos': total_docs,
             'signatarios_removidos': total_sigs
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+# ==================== VERIFICAÇÃO PERMANENTE (Funciona sem PDF) ====================
+
+PAGINA_VERIFICACAO = '''
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificação de Autenticidade - HAMI ERP</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #fff;
+        }
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.05);
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+        h1 {
+            color: #4fc3f7;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.6rem;
+        }
+        .status-valido {
+            background: linear-gradient(135deg, #1b5e20 0%, #2e7d32 100%);
+            border: 2px solid #4caf50;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .status-valido h2 { color: #81c784; margin-bottom: 10px; }
+        .status-invalido {
+            background: linear-gradient(135deg, #b71c1c 0%, #c62828 100%);
+            border: 2px solid #f44336;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .status-invalido h2 { color: #ef9a9a; }
+        .info-section {
+            background: rgba(0,0,0,0.2);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+        .info-section h3 {
+            color: #4fc3f7;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+            border-bottom: 1px solid rgba(79,195,247,0.3);
+            padding-bottom: 10px;
+        }
+        .info-row {
+            display: flex;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .info-label {
+            color: #aaa;
+            min-width: 140px;
+            font-weight: 500;
+        }
+        .info-valor {
+            color: #fff;
+            word-break: break-all;
+        }
+        .hash-box {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.75rem;
+            color: #7ee787;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+        .signatario {
+            background: rgba(79,195,247,0.1);
+            border-left: 3px solid #4fc3f7;
+            border-radius: 0 10px 10px 0;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+        .aviso {
+            background: rgba(255,152,0,0.2);
+            border: 1px solid #ff9800;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 0.9rem;
+        }
+        .aviso strong { color: #ffb74d; }
+        .loading { text-align: center; padding: 50px; }
+        .loading-spinner {
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top: 4px solid #4fc3f7;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Verificação de Autenticidade</h1>
+        <div id="conteudo">
+            <div class="loading">
+                <div class="loading-spinner"></div>
+                <p>Consultando registros...</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        const hash = '{{ hash }}';
+        
+        async function verificar() {
+            try {
+                const resp = await fetch(`/api/verificar_permanente/${hash}`);
+                const data = await resp.json();
+                
+                if (data.erro) {
+                    document.getElementById('conteudo').innerHTML = `
+                        <div class="status-invalido">
+                            <h2>❌ Documento Não Encontrado</h2>
+                            <p>${data.erro}</p>
+                        </div>
+                        <div class="aviso">
+                            <strong>⚠️ Atenção:</strong> Este hash não corresponde a nenhum documento registrado em nosso sistema.
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let signatariosHtml = '';
+                data.signatarios.forEach((sig, idx) => {
+                    signatariosHtml += `
+                        <div class="signatario">
+                            <div class="info-row">
+                                <span class="info-label">👤 Nome:</span>
+                                <span class="info-valor">${sig.nome}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">📋 CPF:</span>
+                                <span class="info-valor">${sig.cpf_mascarado || 'Não informado'}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">📅 Assinado em:</span>
+                                <span class="info-valor">${sig.data_assinatura}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">🌐 IP:</span>
+                                <span class="info-valor">${sig.ip}</span>
+                            </div>
+                            ${sig.localizacao ? `
+                            <div class="info-row">
+                                <span class="info-label">📍 Localização:</span>
+                                <span class="info-valor">${sig.localizacao}</span>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('conteudo').innerHTML = `
+                    <div class="status-valido">
+                        <h2>✅ Documento Autêntico</h2>
+                        <p>Este documento foi assinado eletronicamente e está registrado em nosso sistema.</p>
+                    </div>
+                    
+                    <div class="info-section">
+                        <h3>📄 Informações do Documento</h3>
+                        <div class="info-row">
+                            <span class="info-label">Título:</span>
+                            <span class="info-valor">${data.titulo}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Arquivo:</span>
+                            <span class="info-valor">${data.arquivo_nome}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Criado em:</span>
+                            <span class="info-valor">${data.criado_em}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Criado por:</span>
+                            <span class="info-valor">${data.criado_por}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Hash SHA-256:</span>
+                        </div>
+                        <div class="hash-box">${data.hash}</div>
+                    </div>
+                    
+                    <div class="info-section">
+                        <h3>✍️ Signatários (${data.signatarios.length})</h3>
+                        ${signatariosHtml}
+                    </div>
+                    
+                    <div class="aviso">
+                        <strong>ℹ️ Nota:</strong> Este registro é mantido permanentemente para fins de verificação legal, 
+                        conforme MP 2.200-2/2001 e Lei 14.063/2020.
+                    </div>
+                `;
+            } catch (e) {
+                document.getElementById('conteudo').innerHTML = `
+                    <div class="status-invalido">
+                        <h2>❌ Erro de Conexão</h2>
+                        <p>Não foi possível verificar o documento. Tente novamente.</p>
+                    </div>
+                `;
+            }
+        }
+        
+        verificar();
+    </script>
+</body>
+</html>
+'''
+
+@app.route('/verificar/<hash>')
+def pagina_verificacao(hash):
+    """Página de verificação permanente de autenticidade"""
+    return render_template_string(PAGINA_VERIFICACAO, hash=hash)
+
+@app.route('/api/verificar_permanente/<doc_hash>')
+def verificar_permanente(doc_hash):
+    """
+    API de verificação permanente - funciona baseado no log de auditoria,
+    não precisa do PDF original estar armazenado
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Primeiro tenta buscar pelo hash do documento na tabela documentos
+        cur.execute('''
+            SELECT doc_id, titulo, arquivo_nome, arquivo_hash, criado_em, criado_por
+            FROM documentos WHERE arquivo_hash = %s
+        ''', (doc_hash,))
+        doc = cur.fetchone()
+        
+        # Se não encontrou pelo hash, tenta buscar pelo doc_id (para compatibilidade)
+        if not doc:
+            cur.execute('''
+                SELECT doc_id, titulo, arquivo_nome, arquivo_hash, criado_em, criado_por
+                FROM documentos WHERE doc_id = %s
+            ''', (doc_hash,))
+            doc = cur.fetchone()
+        
+        # Se ainda não encontrou, buscar no log de auditoria
+        if not doc:
+            # Buscar no log de auditoria pelo doc_id ou hash
+            cur.execute('''
+                SELECT DISTINCT doc_id, dados_adicionais, timestamp, usuario
+                FROM log_auditoria 
+                WHERE (doc_id = %s OR dados_adicionais::text LIKE %s)
+                AND acao = 'ASSINATURA_CONCLUIDA'
+                ORDER BY timestamp DESC
+            ''', (doc_hash, f'%{doc_hash}%'))
+            audit_rows = cur.fetchall()
+            
+            if not audit_rows:
+                cur.close()
+                conn.close()
+                return jsonify({'erro': 'Documento não encontrado no registro de assinaturas'})
+            
+            # Construir resposta apenas com dados do log de auditoria
+            signatarios = []
+            for row in audit_rows:
+                dados = json.loads(row['dados_adicionais']) if row['dados_adicionais'] else {}
+                signatarios.append({
+                    'nome': row['usuario'],
+                    'cpf_mascarado': dados.get('cpf_mascarado', 'N/A'),
+                    'data_assinatura': row['timestamp'].strftime('%d/%m/%Y às %H:%M') if row['timestamp'] else 'N/A',
+                    'ip': dados.get('ip', 'N/A'),
+                    'localizacao': f"{dados.get('latitude', 'N/A')}, {dados.get('longitude', 'N/A')}" if dados.get('latitude') else None
+                })
+            
+            cur.close()
+            conn.close()
+            
+            return jsonify({
+                'titulo': 'Documento (dados do log)',
+                'arquivo_nome': 'N/A',
+                'hash': doc_hash,
+                'criado_em': 'N/A',
+                'criado_por': 'N/A',
+                'signatarios': signatarios,
+                'fonte': 'log_auditoria'
+            })
+        
+        doc_id = doc['doc_id']
+        
+        # Buscar signatários que assinaram
+        cur.execute('''
+            SELECT nome, cpf, data_assinatura, ip_assinatura, latitude, longitude
+            FROM signatarios
+            WHERE doc_id = %s AND assinado = TRUE
+        ''', (doc_id,))
+        sigs = cur.fetchall()
+        
+        signatarios = []
+        for sig in sigs:
+            cpf_mascarado = None
+            if sig['cpf']:
+                cpf_mascarado = sig['cpf'][:3] + '.***.***-' + sig['cpf'][-2:]
+            
+            loc = None
+            if sig['latitude'] and sig['longitude']:
+                loc = f"{sig['latitude']}, {sig['longitude']}"
+            
+            signatarios.append({
+                'nome': sig['nome'],
+                'cpf_mascarado': cpf_mascarado,
+                'data_assinatura': sig['data_assinatura'].strftime('%d/%m/%Y às %H:%M') if sig['data_assinatura'] else 'N/A',
+                'ip': sig['ip_assinatura'] or 'N/A',
+                'localizacao': loc
+            })
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'titulo': doc['titulo'],
+            'arquivo_nome': doc['arquivo_nome'],
+            'hash': doc['arquivo_hash'],
+            'criado_em': doc['criado_em'].strftime('%d/%m/%Y às %H:%M') if doc['criado_em'] else 'N/A',
+            'criado_por': doc['criado_por'],
+            'signatarios': signatarios,
+            'fonte': 'banco_completo'
         })
         
     except Exception as e:
