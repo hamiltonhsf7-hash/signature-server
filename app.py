@@ -3203,9 +3203,9 @@ PAGINA_VERIFICACAO = '''
 </html>
 '''
 
-@app.route('/verificar/<doc_id>')
-def pagina_verificacao(doc_id):
-    """Página de verificação de autenticidade do documento"""
+@app.route('/verificar_doc/<doc_id>')
+def pagina_verificacao_doc(doc_id):
+    """Página de verificação de autenticidade do documento (legado - usa doc_id)"""
     return render_template_string(PAGINA_VERIFICACAO)
 
 @app.route('/api/verificar_dados/<doc_id>')
@@ -3536,8 +3536,8 @@ PAGINA_VERIFICACAO = '''
 '''
 
 @app.route('/verificar/<hash>')
-def pagina_verificacao(hash):
-    """Página de verificação permanente de autenticidade"""
+def pagina_verificacao_permanente(hash):
+    """Página de verificação permanente de autenticidade (usa hash do documento)"""
     return render_template_string(PAGINA_VERIFICACAO, hash=hash)
 
 @app.route('/api/verificar_permanente/<doc_hash>')
