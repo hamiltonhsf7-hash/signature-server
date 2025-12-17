@@ -790,10 +790,10 @@ PAGINA_ASSINATURA = '''
                             <h2>✅ Documento Já Assinado</h2>
                             <p>Este documento foi assinado em ${data.data_assinatura}</p>
                             <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
-                                <a href="/api/documento/${token}/download" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
                                     📄 Baixar Documento Original
                                 </a>
-                                <a href="/api/pdf_assinado_por_token/${token}" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
                                     ✅ Baixar Documento Assinado
                                 </a>
                             </div>
@@ -1271,10 +1271,10 @@ PAGINA_ASSINATURA = '''
                             <h2>✅ Documento Assinado com Sucesso!</h2>
                             <p>Sua assinatura foi registrada em ${new Date().toLocaleString('pt-BR')}</p>
                             <div style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
-                                <a href="/api/documento/${token}/download" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                <a href="/api/documento/${token}/download" target="_blank" class="btn btn-primario" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
                                     📄 Baixar Documento Original
                                 </a>
-                                <a href="/api/pdf_assinado_por_token/${token}" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
+                                <a href="/api/pdf_assinado_por_token/${token}" target="_blank" class="btn btn-sucesso" style="text-decoration: none; display: inline-block; padding: 12px 25px;">
                                     ✅ Baixar Documento Assinado
                                 </a>
                             </div>
