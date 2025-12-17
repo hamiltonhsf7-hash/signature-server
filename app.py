@@ -1455,7 +1455,7 @@ def download_documento_original(token):
         return Response(
             pdf_data,
             mimetype='application/pdf',
-            headers={'Content-Disposition': f'attachment; filename="{row["arquivo_nome"]}"'}
+            headers={'Content-Disposition': f'inline; filename="{row["arquivo_nome"]}"'}
         )
         
     except Exception as e:
@@ -1602,21 +1602,34 @@ def assinar():
             
             todos_assinaram = stats['total'] == stats['assinados']
             
-            # Notificar criador do documento por email (assíncrono para evitar timeout)
-            # Email individual a cada assinatura + email quando todos assinarem
-            notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=False)
+            # Enviar todos os emails em uma única thread com delay para evitar rate limit
+            def enviar_emails_com_delay():
+                import time
+                try:
+                    # Email 1: Notificar criador sobre a assinatura individual
+                    notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=False)
+                    time.sleep(1)  # Delay para evitar rate limit (2 req/s)
+                    
+                    # Email 2: Notificar signatário (se informou email)
+                    if email_signatario:
+                        notificar_signatario_individual(row['doc_id'], row['nome'], email_signatario, todos_assinaram=False)
+                        time.sleep(1)
+                    
+                    # Se todos assinaram, enviar emails de conclusão
+                    if todos_assinaram:
+                        # Email 3: Notificar criador sobre conclusão
+                        notificar_assinatura_individual(row['doc_id'], row['nome'], todos_assinaram=True)
+                        time.sleep(1)
+                        
+                        # Email 4: Notificar signatário sobre conclusão
+                        if email_signatario:
+                            notificar_signatario_individual(row['doc_id'], row['nome'], email_signatario, todos_assinaram=True)
+                except Exception as e:
+                    print(f"[EMAIL] Erro ao enviar emails: {e}")
             
-            # Notificar o próprio signatário se ele informou email
-            if email_signatario:
-                notificar_signatario_async(row['doc_id'], row['nome'], email_signatario, todos_assinaram=False)
-            
-            if todos_assinaram:
-                # Enviar email especial quando todos assinaram
-                notificar_assinatura_async(row['doc_id'], row['nome'], todos_assinaram=True)
-                
-                # Também notificar o signatário quando todos assinaram
-                if email_signatario:
-                    notificar_signatario_async(row['doc_id'], row['nome'], email_signatario, todos_assinaram=True)
+            thread = threading.Thread(target=enviar_emails_com_delay, daemon=True)
+            thread.start()
+            print(f"[EMAIL] Thread de emails iniciada para doc_id: {row['doc_id']}")
         except Exception as e:
             print(f"[EMAIL] Erro ao verificar/notificar: {e}")
         
@@ -2460,7 +2473,7 @@ def get_pdf_assinado(doc_id):
             output.getvalue(),
             mimetype='application/pdf',
             headers={
-                'Content-Disposition': f'attachment; filename="ASSINADO_{doc["arquivo_nome"]}"',
+                'Content-Disposition': f'inline; filename="ASSINADO_{doc["arquivo_nome"]}"',
                 'Content-Type': 'application/pdf'
             }
         )
@@ -2508,7 +2521,7 @@ def download_documento(token):
             pdf_data,
             mimetype='application/pdf',
             headers={
-                'Content-Disposition': f'attachment; filename="ASSINADO_{row["arquivo_nome"]}"',
+                'Content-Disposition': f'inline; filename="ASSINADO_{row["arquivo_nome"]}"',
                 'Content-Type': 'application/pdf'
             }
         )
