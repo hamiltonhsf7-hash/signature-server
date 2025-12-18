@@ -3454,7 +3454,122 @@ def limpar_documentos():
     except Exception as e:
         return jsonify({'erro': str(e)})
 
+@app.route('/api/limpar_documentos_antigos', methods=['POST'])
+def limpar_documentos_antigos():
+    """Remove os X documentos mais antigos"""
+    try:
+        data = request.json or {}
+        chave = data.get('chave_confirmacao', '')
+        quantidade = data.get('quantidade', 10)  # Padrão: 10 documentos
+        
+        # Chave de segurança
+        if chave != 'CONFIRMAR_LIMPEZA_HAMI':
+            return jsonify({'erro': 'Chave de confirmação inválida'})
+        
+        # Validar quantidade
+        try:
+            quantidade = int(quantidade)
+            if quantidade < 1:
+                return jsonify({'erro': 'Quantidade deve ser maior que 0'})
+        except:
+            return jsonify({'erro': 'Quantidade inválida'})
+        
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Buscar os X documentos mais antigos (ordenados por data de criação)
+        cur.execute('''
+            SELECT doc_id, titulo, criado_em FROM documentos 
+            ORDER BY criado_em ASC
+            LIMIT %s
+        ''', (quantidade,))
+        docs_antigos = cur.fetchall()
+        doc_ids = [row['doc_id'] for row in docs_antigos]
+        
+        if not doc_ids:
+            cur.close()
+            conn.close()
+            return jsonify({
+                'sucesso': True,
+                'documentos_removidos': 0,
+                'signatarios_removidos': 0,
+                'mensagem': 'Nenhum documento encontrado'
+            })
+        
+        # Contar signatários associados
+        cur.execute('''
+            SELECT COUNT(*) as count FROM signatarios 
+            WHERE doc_id = ANY(%s)
+        ''', (doc_ids,))
+        total_sigs = cur.fetchone()['count']
+        
+        # Deletar signatários dos documentos antigos
+        cur.execute('''
+            DELETE FROM signatarios 
+            WHERE doc_id = ANY(%s)
+        ''', (doc_ids,))
+        
+        # Deletar documentos antigos
+        cur.execute('''
+            DELETE FROM documentos 
+            WHERE doc_id = ANY(%s)
+        ''', (doc_ids,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Pegar data do documento mais antigo e mais recente removido
+        data_mais_antigo = docs_antigos[0]['criado_em'].strftime('%d/%m/%Y') if docs_antigos else ''
+        data_mais_recente = docs_antigos[-1]['criado_em'].strftime('%d/%m/%Y') if docs_antigos else ''
+        
+        return jsonify({
+            'sucesso': True,
+            'documentos_removidos': len(doc_ids),
+            'signatarios_removidos': total_sigs,
+            'data_mais_antigo': data_mais_antigo,
+            'data_mais_recente': data_mais_recente
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)})
+
+@app.route('/api/contar_documentos')
+def contar_documentos():
+    """Retorna a contagem de documentos no servidor"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Total de documentos
+        cur.execute('SELECT COUNT(*) as total FROM documentos')
+        total = cur.fetchone()['total']
+        
+        # Documento mais antigo
+        cur.execute('SELECT MIN(criado_em) as mais_antigo FROM documentos')
+        row = cur.fetchone()
+        mais_antigo = row['mais_antigo'].strftime('%d/%m/%Y') if row and row['mais_antigo'] else None
+        
+        # Documento mais recente
+        cur.execute('SELECT MAX(criado_em) as mais_recente FROM documentos')
+        row = cur.fetchone()
+        mais_recente = row['mais_recente'].strftime('%d/%m/%Y') if row and row['mais_recente'] else None
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'total': total,
+            'mais_antigo': mais_antigo,
+            'mais_recente': mais_recente
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e), 'total': 0})
+
+
 # ==================== VERIFICAÇÃO PERMANENTE (Funciona sem PDF) ====================
+
 
 PAGINA_VERIFICACAO = '''
 <!DOCTYPE html>
